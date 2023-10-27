@@ -26,7 +26,9 @@ def train_cv_bgpfa(Y,
                    likelihood='Gaussian',
                    model='bgpfa',
                    ard=True,
-                   Bayesian=True):
+                   Bayesian=True,
+                   prior_fourier_func=None,
+                   prior_func_kwargs=None):
     """
     Parameters
     ----------
@@ -80,12 +82,15 @@ def train_cv_bgpfa(Y,
 
     manif = Euclid(T, d_fit)
     lprior = Null(manif)
-    lat_dist = GP_circ(manif,
-                       T,
-                       n_samples,
-                       fit_ts[..., T1],
-                       _scale=lat_scale,
-                       ell=ell)  #initial ell ~200ms
+    lat_dist = GP_circ(
+        manif,
+        T,
+        n_samples,
+        fit_ts[..., T1],
+        _scale=lat_scale,
+        ell=ell,  #initial ell ~200ms
+        prior_fourier_func=prior_fourier_func,
+        prior_func_kwargs=prior_func_kwargs)
 
     if model in ['bgpfa', 'bGPFA', 'gpfa', 'GPFA"']:  ###Bayesian GPFA!
         if likelihood == 'Gaussian':
@@ -120,7 +125,14 @@ def train_cv_bgpfa(Y,
     manif = Euclid(T, d_fit)
     lprior = Null(manif)
     ell0 = mod.lat_dist.ell.detach().cpu()
-    lat_dist = GP_circ(manif, T, n_samples, fit_ts, _scale=lat_scale, ell=ell0)
+    lat_dist = GP_circ(manif,
+                       T,
+                       n_samples,
+                       fit_ts,
+                       _scale=lat_scale,
+                       ell=ell0,
+                       prior_fourier_func=prior_fourier_func,
+                       prior_func_kwargs=prior_func_kwargs)
 
     if model in ['bgpfa', 'bGPFA', 'gpfa', 'GPFA']:  ###Bayesian GPFA!!!
         if likelihood == 'Gaussian':

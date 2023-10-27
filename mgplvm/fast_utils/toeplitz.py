@@ -232,3 +232,43 @@ def sym_toeplitz_derivative_quadratic_form(left_vectors, right_vectors):
     res[..., 0] -= (left_vectors * right_vectors).view(*batch_shape, -1).sum(-1)
 
     return res
+
+
+# aa2236 New function to do toeplitz matmul with the fourier domain expression
+def fourier_toeplitz_matmul(fourier_func, func_kwargs, tensor,
+                            matrix_shape: tuple, dt, T):
+    # Replacing toeplitz_column.shape with input matrix_shape
+    toeplitz_shape = torch.Size((*matrix_shape, matrix_shape[-1]))
+    output_shape = broadcasting._matmul_broadcast_shape(toeplitz_shape,
+                                                        tensor.shape)
+    broadcasted_t_shape = output_shape[:-1] if tensor.dim(
+    ) > 1 else output_shape
+
+    if tensor.ndimension() == 1:
+        tensor = tensor.unsqueeze(-1)
+    tensor = tensor.expand(*output_shape)
+
+    *batch_shape, orig_size, num_rhs = tensor.size()
+
+    # In the original code, type and device came from toeplitz_column here
+    temp_tensor = torch.zeros(*batch_shape,
+                              2 * orig_size - 1,
+                              num_rhs,
+                              dtype=tensor.dtype,
+                              device=tensor.device)
+    temp_tensor[..., :orig_size, :] = tensor
+
+    fft_M = torch.fft.fft(temp_tensor.transpose(-1, -2).contiguous())
+
+    # It is assumed that dt is the same for all trials
+    # Need to verify normalisation constant - T * length works for the SE kernel
+    length = fft_M.shape[-1]  # Length of vector for which fft is computed
+    freqs = torch.fft.fftfreq(length, d=dt).to(tensor.device)
+    fft_c = (fourier_func(freqs, **func_kwargs) / T *
+             length).unsqueeze(-2).expand_as(fft_M)
+
+    fft_product = fft_M.mul_(fft_c)
+
+    output = torch.fft.ifft(fft_product).real.transpose(-1, -2)
+    output = output[..., :orig_size, :]
+    return output

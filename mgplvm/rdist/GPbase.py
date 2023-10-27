@@ -6,7 +6,7 @@ from ..utils import softplus, inv_softplus
 from ..manifolds.base import Manifold
 from .common import Rdist
 from typing import Optional
-from ..fast_utils.toeplitz import sym_toeplitz_matmul
+from ..fast_utils.toeplitz import sym_toeplitz_matmul, fourier_toeplitz_matmul
 
 
 class GPbase(Rdist):
@@ -18,7 +18,9 @@ class GPbase(Rdist):
                  n_samples: int,
                  ts: torch.Tensor,
                  _scale=0.9,
-                 ell=None):
+                 ell=None,
+                 prior_fourier_func=None,
+                 prior_func_kwargs=None):
         """
         Parameters
         ----------
@@ -78,6 +80,17 @@ class GPbase(Rdist):
 
         self.dt = (ts[0, 0, 1] - ts[0, 0, 0]).item()  #scale by dt
 
+        self.n_samples = n_samples
+
+        #initialize prior fourier function
+        # If None, the squared exponential kernel is used
+        # This means the hardcode K_1_2() function is used
+        # Otherwise, the prior_fourier_func defines the square root of the fourier transform of the prior kernel
+        self.prior_fourier_func = prior_fourier_func
+        if prior_func_kwargs is None:
+            prior_func_kwargs = dict()
+        self.prior_func_kwargs = prior_func_kwargs
+
     @property
     def scale(self) -> torch.Tensor:
         #print(self._scale.shape, type(self._scale))
@@ -100,8 +113,7 @@ class GPbase(Rdist):
     def lat_mu(self):
         """return variational mean mu = K_half @ nu"""
         nu = self.nu
-        K_half = self.K_half()  #(n_samples x d x m)
-        mu = sym_toeplitz_matmul(K_half, nu[..., None])[..., 0]
+        mu = self.covariance_mult(nu[..., None])[..., 0]
         return mu.transpose(-1, -2)  #(n_samples x m x d)
 
     def K_half(self, sample_idxs=None):
@@ -125,6 +137,24 @@ class GPbase(Rdist):
 
         return K_half
 
+    # Multiply with K2 with a vector or matrix M
+    def covariance_mult(self, M, sample_idxs=None):
+        if self.prior_fourier_func is None:
+            return sym_toeplitz_matmul(self.K_half(sample_idxs), M)
+        else:
+            if (sample_idxs is None) or (self.dts_sq.shape[0]
+                                         == 1):  # Logic from K_half()
+                n_samples = self.n_samples
+            else:
+                n_samples = len(sample_idxs)  # aa2236 need to verify
+
+            self.prior_func_kwargs[
+                'l'] = self.ell  # need to set this here because self.ell is not in GPU in __init__ but also it might change during different calls?
+            return fourier_toeplitz_matmul(self.prior_fourier_func,
+                                           self.prior_func_kwargs, M,
+                                           (n_samples, self.d, self.m), self.dt,
+                                           self.m)
+
     def I_v(self, v, sample_idxs=None):
         """
         Compute I @ v for some vector v.
@@ -145,9 +175,8 @@ class GPbase(Rdist):
         v = torch.diag_embed(torch.ones(
             self._scale.shape))  #(n_samples x d x m x m)
         I = self.I_v(v)  #(n_samples x d x m x m)
-        K_half = self.K_half()  #(n_samples x d x m)
 
-        Khalf_I = sym_toeplitz_matmul(K_half, I)  #(n_samples x d x m x m)
+        Khalf_I = self.covariance_mult(I)  #(n_samples x d x m x m)
         K_post = Khalf_I @ Khalf_I.transpose(-1, -2)  #Kpost = Khalf@I@I@Khalf
 
         return K_post.detach()
@@ -168,8 +197,13 @@ class GPbase(Rdist):
         lq = self.kl(batch_idxs=batch_idxs,
                      sample_idxs=sample_idxs)  #(n_samples x d)
 
-        K_half = self.K_half(sample_idxs=sample_idxs)  #(n_samples x d x m)
-        n_samples, d, m = K_half.shape
+        # K_half = self.K_half(sample_idxs=sample_idxs)  #(n_samples x d x m)
+        if (sample_idxs is None) or (self.dts_sq.shape[0]
+                                     == 1):  # Logic from K_half()
+            n_samples = self.n_samples
+        else:
+            n_samples = len(sample_idxs)  # aa2236 need to verify
+        d, m = self.d, self.m
 
         # sample a batch with dims: (n_samples x d x m x n_mc)
         v = torch.randn(n_samples, d, m, size[0])  # v ~ N(0, 1)
@@ -182,7 +216,8 @@ class GPbase(Rdist):
         samp = nu[..., None] + I_v  #add mean parameter to each sample
 
         #compute K@(I@v+nu)
-        x = sym_toeplitz_matmul(K_half, samp)  #(n_samples x d x m x n_mc)
+        x = self.covariance_mult(
+            samp, sample_idxs=sample_idxs)  #(n_samples x d x m x n_mc)
         x = x.permute(-1, 0, 2, 1)  #(n_mc x n_samples x m x d)
 
         if batch_idxs is not None:  #only select some time points

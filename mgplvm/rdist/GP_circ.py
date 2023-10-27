@@ -19,7 +19,9 @@ class GP_circ(GPbase):
                  n_samples: int,
                  ts: torch.Tensor,
                  _scale=0.9,
-                 ell=None):
+                 ell=None,
+                 prior_fourier_func=None,
+                 prior_func_kwargs=None):
         """
         Parameters
         ----------
@@ -42,7 +44,9 @@ class GP_circ(GPbase):
                                       n_samples,
                                       ts,
                                       _scale=_scale,
-                                      ell=ell)
+                                      ell=ell,
+                                      prior_fourier_func=prior_fourier_func,
+                                      prior_func_kwargs=prior_func_kwargs)
 
         #initialize circulant parameters
         if self.m % 2 == 0:

@@ -9,8 +9,13 @@ def k_1_2_squared_exponential(f, l):
 
 
 def k_1_2_exponential(f, l):
-    pass
+    omega = 2 * np.pi * f
+    return torch.sqrt(1/(omega + 1/l))
 
 
-def k_1_2_matern(f, l):
-    pass
+def k_1_2_matern_3_2(f, l):
+    omega = 2 * np.pi * f
+    a = np.sqrt(3)/l
+    fractional_term = 1/(omega + a)
+    fourier = fractional_term + a * torch.square(fractional_term)
+    return torch.sqrt(fourier)

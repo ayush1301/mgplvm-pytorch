@@ -8,8 +8,8 @@ def k_1_2_squared_exponential(f, l):
     # prefactor = ((2 * np.pi)**(1 / 4)) * (l**(-1 / 2))
     # return prefactor * torch.exp(-((omega * l)**2) / 4)
 
-    fourier = np.sqrt(2*np.pi)*l*torch.exp(-torch.square(omega*l)/2)
-    return torch.sqrt(fourier)
+    prefactor = ((2 * np.pi)**(1 / 4)) * torch.sqrt(l)
+    return prefactor * torch.exp(-((omega * l)**2) / 4)
 
 
 def k_1_2_exponential(f, l):

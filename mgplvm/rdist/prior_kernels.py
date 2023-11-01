@@ -30,3 +30,10 @@ def k_1_2_matern_3_2(f, l):
     num = torch.sqrt(12*np.sqrt(3)*l)
     denom = 3 + torch.square(l*omega)
     return num/denom
+
+def k_1_2_matern_5_2(f, l):
+    omega = 2 * np.pi * f
+
+    num = torch.sqrt(400*np.sqrt(5)*l)
+    denom = np.sqrt(3)*torch.pow(torch.square(l*omega) + 5, 1.5)
+    return num/denom

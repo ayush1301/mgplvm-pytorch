@@ -3,7 +3,8 @@ from matplotlib import pyplot as plt
 import torch
 import mgplvm as mgp
 import time
-from scipy.stats import poisson
+from scipy.stats import poisson, norm
+import pickle
 
 # def matern_kernel(r, l, nu):
 #     """
@@ -40,6 +41,12 @@ def matern_5_2_kernel(r, l):
     return (1 + np.sqrt(5) * r / l + 5 * r**2 /
             (3 * l**2)) * np.exp(-np.sqrt(5) * r / l)
 
+def rational_quadratic_kernel(r, l, alpha):
+    """
+    Rational quadratic kernel function
+    """
+    return (1 + r**2 / (2 * alpha * l**2))**(-alpha)
+
 
 class SyntheticData:
 
@@ -53,7 +60,8 @@ class SyntheticData:
                  c_mean=0,
                  c_var=1,
                  N=100,
-                 d=10):
+                 d=10,
+                 noise='poisson',):
         self.dt = dt  # time step (seconds)
         self.T = int((stop - start) / dt)  # number of time steps
 
@@ -80,6 +88,8 @@ class SyntheticData:
         self.Xs = []
         self.Ys = []
 
+        self.noise = noise
+
     def get_X(self, kernel):  # return ntrials x D x T matrix
         if len(self.l) != self.D:
             raise ValueError("Length scale must be list of length D")
@@ -98,6 +108,9 @@ class SyntheticData:
             elif kernel == 'matern_5_2':
                 K = matern_5_2_kernel(
                     abs(self.x_axis[:, None] - self.x_axis[None, :]), l)
+            elif kernel == 'rational_quadratic1':
+                K = rational_quadratic_kernel(
+                    self.x_axis[:, None] - self.x_axis[None, :], l, 1)
             else:
                 raise ValueError("Kernel Incorrect")
 
@@ -119,22 +132,28 @@ class SyntheticData:
     def get_C(self):  # returns N x D matrix
         return np.random.normal(self.c_mean, self.c_var, size=(self.N, self.D))
 
-    def get_Y(self, kernel='squared_exponential', noise='poisson', link='softplus'):
+    def get_Y(self, kernel='squared_exponential', link='softplus', s=0):
         X = self.get_X(kernel)
         F = np.matmul(self.C, X) + self.d
-        if noise == 'poisson':
-            if link == 'softplus':
-                self.Ys.append(np.random.poisson(self.dt * np.log(1 + np.exp(F))))
-            elif link == 'exp':
-                self.Ys.append(np.random.poisson(self.dt * np.exp(F)))
-        elif noise == 'gaussian': # Wrong
-            sig = 0.6 * np.std(F)
-            noise = np.random.normal(0, sig, size=F.shape)
-            Y = F + noise
-            self.Ys.append(Y - np.mean(Y, axis=-1, keepdims=True))
+        if link == 'softplus':
+            F = np.log(1 + np.exp(F))
+        elif link == 'exp':
+            F = np.exp(F)
+        elif link is None:
+            pass
+        mu = self.dt * F
+
+        if self.noise == 'poisson':
+            self.Ys.append(np.random.poisson(mu))
+        elif self.noise == 'gaussian': # Wrong
+            # sig = 0.6 * np.std(F)
+            # noise = np.random.normal(0, sig, size=F.shape)
+            # Y = F + noise
+            # self.Ys.append(Y - np.mean(Y, axis=-1, keepdims=True))
+            self.Ys.append(mu + np.random.normal(0, s, size=F.shape))
         return self.Ys[-1]
 
-    def plot_Y(self, ind=None):
+    def plot_Y(self, ind=None, save_fig=None):
         ### plot the activity we just loaded ###
         for i, Y in enumerate(self.Ys):
             if ind is None or i == ind:
@@ -149,15 +168,19 @@ class SyntheticData:
                 plt.title('Raw activity', fontsize=25)
                 plt.xticks([])
                 plt.yticks([])
+                if save_fig is not None:
+                    plt.savefig(save_fig + '_Y_{}.png'.format(i), bbox_inches='tight')
                 plt.show()
 
-    def plot_X(self, ind=None):
+    def plot_X(self, ind=None, save_fig=None):
         ### plot the activity we just loaded ###
         for i, X in enumerate(self.Xs):
             if ind is None or i == ind:
                 X = X[0, ...]  # take first trial
                 for _X in X:  # Loop through dimensions
                     plt.plot(self.x_axis, _X.T)
+                if save_fig is not None:
+                    plt.savefig(save_fig + '_X_{}.png'.format(i), bbox_inches='tight')
                 plt.show()
 
     def training_setup(self, ind: int, rho, n_mc, print_every, max_steps,
@@ -212,15 +235,18 @@ class SyntheticData:
               prior_fourier_func=None,
             #   inv_link=mgp.utils.softplus,
               likelihood_kwargs=None,
-              prior_ell_factor=1):
+              prior_ell_factor=1, save_fig=None):
         Y, fit_ts, rho, ell0, device, data, cb = self.training_setup(
             ind, rho, n_mc, print_every, max_steps, lrate, prior_ell_factor)
 
         ### construct the actual model ###
         ntrials, n, T = Y.shape  # Y should have shape: [number of trials (here 1) x neurons x time points]
         # lik = mgp.likelihoods.NegativeBinomial(n, Y=Y) # we use a negative binomial noise model in this example (recommended for ephys data)
-        lik = mgp.likelihoods.Poisson(n,
-                                      **likelihood_kwargs)
+        if self.noise == 'poisson':
+            lik = mgp.likelihoods.Poisson(n, **likelihood_kwargs)
+        elif self.noise == 'gaussian':
+            lik = mgp.likelihoods.Gaussian(n, Y=Y, d=d_fit)
+
         manif = mgp.manifolds.Euclid(
             T, d_fit
         )  # our latent variables live in a Euclidean space for bGPFA (see Jensen et al. 2020 for alternatives)
@@ -263,6 +289,15 @@ class SyntheticData:
               'iterations')
         mod_train = mgp.crossval.train_model(mod, data, train_ps)
 
+        if nu is None:
+            self._plot_dims(mod, True, save_fig=save_fig)
+            self._plot_dims(mod, False, save_fig=save_fig)
+        else:
+            self._plot_dims(mod, nu, save_fig=save_fig)
+
+        return mod
+    
+    def _plot_dims(self, mod, nu, save_fig=None):
         ### we start by plotting 'informative' and 'discarded' dimensions ###
         print('plotting informative and discarded dimensions')
         dim_scales = mod.obs.dim_scale.detach().cpu().numpy().flatten(
@@ -286,7 +321,12 @@ class SyntheticData:
             plt.ylabel(r'$||\mu||_2$', labelpad=5)
 
         plt.xlabel(r'$\log \, s_d$')
-
+        if save_fig is not None:
+            if nu:
+                suffix = '_nu'
+            else:
+                suffix = '_mu'
+            plt.savefig(save_fig + '{}.png'.format(suffix), bbox_inches='tight')
         plt.show()
 
     def cross_validate(self,
@@ -304,7 +344,9 @@ class SyntheticData:
                        prior_fourier_func=None,
                        likelihood='Poisson',
                        likelihood_kwargs=None,
-                       prior_ell_factor=1):
+                       prior_ell_factor=1,
+                       save_mod=None,
+                       save_fig=None):
         Y, fit_ts, rho, ell0, device, _, cb = self.training_setup(
             ind, rho, n_mc, print_every, max_steps, lrate, prior_ell_factor)
 
@@ -313,7 +355,7 @@ class SyntheticData:
                                                 burnin=burnin,
                                                 lrate=lrate,
                                                 callback=cb)
-
+        _lik = 'Poisson' if self.noise == 'poisson' else 'Gaussian'
         mod, split, trained = mgp.crossval.train_cv_bgpfa(
             Y=Y,
             device=device,
@@ -321,7 +363,7 @@ class SyntheticData:
             fit_ts=fit_ts,
             d_fit=d_fit,
             ell=ell0,
-            likelihood='Poisson',
+            likelihood=_lik,
             nt_train=nt_train,
             nn_train=nn_train,
             test=False,
@@ -329,7 +371,8 @@ class SyntheticData:
             prior_fourier_func=prior_fourier_func,
             likelihood_kwargs=likelihood_kwargs)
         ### need to compute predictive likelihood ###
-
+        if save_mod is not None:
+            pickle.dump(mod, open(save_mod + 'model.pickled', 'wb'))
         Ycv, T1cv, N1cv = split['Y'], split['T1'], split[
             'N1']  # all data, train data and train neurons
         m = self.T
@@ -346,42 +389,69 @@ class SyntheticData:
         # construct input for prediction of neural activity
         query = latents.transpose(-1, -2).to(device)  #(ntrial, d, m)
 
-        # predicted 'F'
+        # predicted 'F' # aa2236 this is without transfer function so it can be negative
         mu = mod.svgp.predict(query[None, ...], full_cov=False)[0]
         # mean of the implied distribution after transfer function (for test neurons)
         Ypred = mod.svgp.likelihood.dist_mean(
             mu)[0].detach().cpu().numpy()[:, N2cv, :]
+        
+        # ## aa2236 from bgpfa.ipynb
+        # Ypreds = []
+        # for i in range(10): # loop over mc samples to avoid memory issues
+        #     Ypred2 = mod.svgp.sample(query, n_mc=100, noise=False) # OG n_mc = 100
+        #     Ypred2 = Ypred2.detach().mean(0).cpu().numpy()  # (ntrial x n x T)
+        #     Ypreds.append(Ypred2)
+        # Ypred2 = np.mean(np.array(Ypreds), axis = (0,1)).T # T x n
+        # ## aa2236
+
 
         # compute log probability of actual test spike counts given test mean predictions
-        LL = poisson.logpmf(Ytest, Ypred, loc=0)
-        LL = np.mean(LL)  # take avg
+        if self.noise == 'poisson':
+            LL = poisson.logpmf(Ytest, Ypred, loc=0)
+            LL = np.mean(LL)  # take avg
+        elif self.noise == 'gaussian':
+            LL = np.mean(np.log(
+                norm.pdf(Ytest, loc=Ypred, scale=np.std(Ypred))))
 
         # also compute MSEs
         print(Ypred.shape, Ytest.shape, 'Ypred, Ytest')
         MSE_vals = np.mean((Ypred - Ytest)**2, axis=(0, -1))
         MSE = np.mean(MSE_vals)  #standard MSE
 
-        # # aa2236 new
-        #     ### we start by plotting 'informative' and 'discarded' dimensions ###
-        # print('plotting informative and discarded dimensions')
-        # dim_scales = mod.obs.dim_scale.detach().cpu().numpy().flatten() #prior scales (s_d)
-        # dim_scales = np.log(dim_scales) #take the log of the prior scales
-        # plt.figure()
-        # if nu:
-        #     nus = np.sqrt(np.mean(mod.lat_dist.nu.detach().cpu().numpy()**2, axis = (0, -1))) #magnitude of the variational means
-        #     plt.scatter(dim_scales, nus, c = 'k', marker = 'x', s = 80) #top right corner are informative, lower left discarded
-        #     plt.ylabel(r'$||\nu||_2$', labelpad = 5)
-        # else:
-        #     # nu is shape [n_trials, n_dims, n_times]
-        #     # lat_mu is shape [n_trials, n_times, n_dims]
-        #     lat_mu = mod.lat_dist.lat_mu.detach().cpu().numpy()
-        #     mus = np.sqrt(np.mean(lat_mu**2, axis=(0, 1)))
-        #     plt.scatter(dim_scales, mus, c = 'k', marker = 'x', s = 80)
-        #     plt.ylabel(r'$||\mu||_2$', labelpad = 5)
+        # aa2236 use self.obs or self.svgp?
+        # svgp_lik = mod.obs.variational_expectation()
 
-        # plt.xlabel(r'$\log \, s_d$')
+        if nu is None:
+            self._plot_dims(mod, True, save_fig=save_fig)
+            self._plot_dims(mod, False, save_fig=save_fig)
+        else:
+            self._plot_dims(mod, nu, save_fig=save_fig)
+        
+        lat_traj, _ = self.get_lat_traj(ind, mod)
 
-        # plt.show()
-        # # aa2236 new
+        return LL, MSE, trained[-1], lat_traj  # LL, MSE, final loss
+    
+    def get_lat_traj(self, ind, mod=None):
+        # assuming just 1 trial
+        xs = self.Xs[ind][0].T # true latents
+        # print(np.shape(xs))
+        xs = xs - np.mean(xs, axis = 0, keepdims = True) # mean subtract
 
-        return LL, MSE, trained[-1]  # LL, MSE, final loss
+        if mod is not None:
+            #### plot latents ####
+            lim = 100
+            # plt.figure()
+            # plt.plot(xs[:lim, 0], xs[:lim, 1], 'k-', label='true') # plot true latents
+            lats = mod.lat_dist.lat_mu.detach().cpu().numpy()[0, ...] # extract model latents
+            dim_scales = mod.obs.dim_scale.detach().cpu().numpy().flatten() # latent scales
+            inds = np.argsort(-dim_scales)[:2] # pick the two most informative dimensions
+            lats = lats[..., inds] # extract corresponding latents
+            lats = lats - np.mean(lats, axis = 0, keepdims = True) # mean subtract
+
+            #fit xs = mus @ T --> T = (mus' * mus)^(-1) * mus' * xs
+            T = np.linalg.inv(lats.T @ lats) @ lats.T @ xs # linear regression
+            lats = lats @ T  #predicted values
+
+            return lats, xs
+        else:
+            return xs

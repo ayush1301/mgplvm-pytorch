@@ -87,6 +87,7 @@ class SyntheticData:
 
         self.Xs = []
         self.Ys = []
+        self.Fs = []
 
         self.noise = noise
 
@@ -142,6 +143,7 @@ class SyntheticData:
         elif link is None:
             pass
         mu = self.dt * F
+        self.Fs.append(mu)
 
         if self.noise == 'poisson':
             self.Ys.append(np.random.poisson(mu))
@@ -170,7 +172,9 @@ class SyntheticData:
                 plt.yticks([])
                 if save_fig is not None:
                     plt.savefig(save_fig + '_Y_{}.png'.format(i), bbox_inches='tight')
-                plt.show()
+                    plt.close()
+                else:
+                    plt.show()
 
     def plot_X(self, ind=None, save_fig=None):
         ### plot the activity we just loaded ###
@@ -181,7 +185,9 @@ class SyntheticData:
                     plt.plot(self.x_axis, _X.T)
                 if save_fig is not None:
                     plt.savefig(save_fig + '_X_{}.png'.format(i), bbox_inches='tight')
-                plt.show()
+                    plt.close()
+                else:
+                    plt.show()
 
     def training_setup(self, ind: int, rho, n_mc, print_every, max_steps,
                        lrate, prior_ell_factor=1):
@@ -235,7 +241,9 @@ class SyntheticData:
               prior_fourier_func=None,
             #   inv_link=mgp.utils.softplus,
               likelihood_kwargs=None,
-              prior_ell_factor=1, save_fig=None):
+              prior_ell_factor=1, save_fig=None,
+              ard=True,
+              learn_scale=False,):
         Y, fit_ts, rho, ell0, device, data, cb = self.training_setup(
             ind, rho, n_mc, print_every, max_steps, lrate, prior_ell_factor)
 
@@ -270,8 +278,8 @@ class SyntheticData:
                                  lprior,
                                  lik,
                                  Y=Y,
-                                 learn_scale=False,
-                                 ard=True,
+                                 learn_scale=learn_scale,
+                                 ard=ard,
                                  rel_scale=rho).to(
                                      device)  #create bGPFA model with ARD
 
@@ -327,7 +335,9 @@ class SyntheticData:
             else:
                 suffix = '_mu'
             plt.savefig(save_fig + '{}.png'.format(suffix), bbox_inches='tight')
-        plt.show()
+            plt.close()
+        else:
+            plt.show()
 
     def cross_validate(self,
                        ind: int,
@@ -342,11 +352,12 @@ class SyntheticData:
                        nt_train=None,
                        nn_train=None,
                        prior_fourier_func=None,
-                       likelihood='Poisson',
                        likelihood_kwargs=None,
                        prior_ell_factor=1,
                        save_mod=None,
-                       save_fig=None):
+                       save_fig=None,
+                       ard=True,
+                       ret_Y=False):
         Y, fit_ts, rho, ell0, device, _, cb = self.training_setup(
             ind, rho, n_mc, print_every, max_steps, lrate, prior_ell_factor)
 
@@ -369,7 +380,8 @@ class SyntheticData:
             test=False,
             rel_scale=rho,
             prior_fourier_func=prior_fourier_func,
-            likelihood_kwargs=likelihood_kwargs)
+            likelihood_kwargs=likelihood_kwargs,
+            ard=ard,)
         ### need to compute predictive likelihood ###
         if save_mod is not None:
             pickle.dump(mod, open(save_mod + 'model.pickled', 'wb'))
@@ -413,9 +425,15 @@ class SyntheticData:
             LL = np.mean(np.log(
                 norm.pdf(Ytest, loc=Ypred, scale=np.std(Ypred))))
 
-        # also compute MSEs
-        print(Ypred.shape, Ytest.shape, 'Ypred, Ytest')
-        MSE_vals = np.mean((Ypred - Ytest)**2, axis=(0, -1))
+        # # also compute MSEs
+        # print(Ypred.shape, Ytest.shape, 'Ypred, Ytest')
+        # MSE_vals = np.mean((Ypred - Ytest)**2, axis=(0, -1))
+        # MSE = np.mean(MSE_vals)  #standard MSE
+
+        # aa2236 new form of MSE
+        Ftest = self.Fs[ind][:, N2cv, :][..., T2cv]
+        print(Ftest.shape, Ypred.shape, 'Ftest, Ypred')
+        MSE_vals = np.mean((Ftest - Ypred)**2, axis=(0, -1))
         MSE = np.mean(MSE_vals)  #standard MSE
 
         # aa2236 use self.obs or self.svgp?
@@ -429,7 +447,16 @@ class SyntheticData:
         
         lat_traj, _ = self.get_lat_traj(ind, mod)
 
-        return LL, MSE, trained[-1], lat_traj  # LL, MSE, final loss
+        # let's also print the learned timescales (sorted by the prior scales s_d)
+        dim_scales = mod.obs.dim_scale.detach().cpu().numpy().flatten() #prior scales (s_d)
+        dim_scales = np.log(dim_scales)
+        taus = mod.lat_dist.ell.detach().cpu().numpy().flatten()[np.argsort(-dim_scales)]*self.dt*1000
+        print('learned timescales (ms):', np.round(taus).astype(int))
+
+        if not ret_Y:
+            return LL, MSE, trained[-1], lat_traj # LL, MSE, final loss
+        else:
+            return LL, MSE, trained[-1], lat_traj, Ytest, Ypred, mod, mu
     
     def get_lat_traj(self, ind, mod=None):
         # assuming just 1 trial

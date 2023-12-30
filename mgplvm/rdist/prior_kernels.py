@@ -14,7 +14,7 @@ def k_1_2_squared_exponential(f, l):
 
 def k_1_2_exponential(f, l):
     omega = 2 * np.pi * f
-    fourier = (2*l) / (1 + (omega * l)**2)
+    fourier = (2 * l) / (1 + (omega * l)**2)
     return torch.sqrt(fourier)
 
 
@@ -27,13 +27,19 @@ def k_1_2_matern_3_2(f, l):
 
     # (1+(sqrt(3)*|t|)/l)e^(-(sqrt(3)*|t|)/l)
 
-    num = torch.sqrt(12*np.sqrt(3)*l)
-    denom = 3 + torch.square(l*omega)
-    return num/denom
+    num = torch.sqrt(12 * np.sqrt(3) * l)
+    denom = 3 + torch.square(l * omega)
+    return num / denom
+
 
 def k_1_2_matern_5_2(f, l):
     omega = 2 * np.pi * f
 
-    num = torch.sqrt(400*np.sqrt(5)*l)
-    denom = np.sqrt(3)*torch.pow(torch.square(l*omega) + 5, 1.5)
-    return num/denom
+    num = torch.sqrt(400 * np.sqrt(5) * l)
+    denom = np.sqrt(3) * torch.pow(torch.square(l * omega) + 5, 1.5)
+    return num / denom
+
+def k_1_2_rational_quadratic_1(f, l):
+    # alpha = 1
+    omega = 2 * np.pi * f
+    return 2**(1/4) * np.sqrt(np.pi) * torch.sqrt(l) * torch.exp(-l*torch.abs(omega)/np.sqrt(2))

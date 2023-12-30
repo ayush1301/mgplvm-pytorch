@@ -7,3 +7,5 @@ from . import manifolds
 from . import crossval
 from . import syndata
 from . import fast_utils
+from . import utils
+from . import likelihoods

@@ -10,25 +10,28 @@ from ..lpriors import Null
 from ..models import Lvgplvm, Lgplvm
 
 
-def train_cv_bgpfa(Y,
-                   device,
-                   train_ps,
-                   fit_ts,
-                   d_fit,
-                   ell,
-                   T1=None,
-                   N1=None,
-                   nt_train=None,
-                   nn_train=None,
-                   test=True,
-                   lat_scale=1,
-                   rel_scale=1,
-                   likelihood='Gaussian',
-                   model='bgpfa',
-                   ard=True,
-                   Bayesian=True,
-                   prior_fourier_func=None,
-                   prior_func_kwargs=None):
+def train_cv_bgpfa(
+    Y,
+    device,
+    train_ps,
+    fit_ts,
+    d_fit,
+    ell,
+    T1=None,
+    N1=None,
+    nt_train=None,
+    nn_train=None,
+    test=True,
+    lat_scale=1,
+    rel_scale=1,
+    likelihood='Gaussian',
+    model='bgpfa',
+    ard=True,
+    Bayesian=True,
+    prior_fourier_func=None,
+    prior_func_kwargs=None,
+    likelihood_kwargs=None,
+):
     """
     Parameters
     ----------
@@ -71,7 +74,7 @@ def train_cv_bgpfa(Y,
     nn_train = int(round(n / 2)) if nn_train is None else nn_train
 
     if T1 is None:  # random shuffle of timepoints
-        T1 = np.random.permutation(np.arange(m))[:nt_train]
+        T1 = np.arange(m)[:nt_train]
     if N1 is None:  # random shuffle of neurons
         N1 = np.random.permutation(np.arange(n))[:nn_train]
     split = {'Y': Y, 'N1': N1, 'T1': T1}
@@ -99,7 +102,10 @@ def train_cv_bgpfa(Y,
             lik = NegativeBinomial(n, Y=Y1)
         elif likelihood == 'Poisson':
             #print('poisson lik')
-            lik = Poisson(n)
+            if likelihood_kwargs is None:
+                lik = Poisson(n)
+            else:
+                lik = Poisson(n, **likelihood_kwargs)
 
         mod = Lvgplvm(n,
                       T,
@@ -154,7 +160,10 @@ def train_cv_bgpfa(Y,
                 val.detach().cpu()
                 for val in [mod.obs.likelihood.c, mod.obs.likelihood.d]
             ]
-            lik = Poisson(n, c=c, d=d)
+            if likelihood_kwargs:
+                lik = Poisson(n, c=c, d=d, inv_link=likelihood_kwargs['inv_link'])
+            else:
+                lik = Poisson(n, c=c, d=d)
 
         if Bayesian:
             #print('bayesian')
@@ -207,9 +216,9 @@ def train_cv_bgpfa(Y,
     train_ps2 = update_params(train_ps,
                               neuron_idxs=N1,
                               max_steps=int(round(train_ps['max_steps'])))
-    train_model(mod, torch.tensor(Y2).to(device), train_ps2)
+    trained = train_model(mod, torch.tensor(Y2).to(device), train_ps2)
 
     if test:
         test_cv(mod, split, device, n_mc=train_ps['n_mc'], Print=True)
 
-    return mod, split
+    return mod, split, trained

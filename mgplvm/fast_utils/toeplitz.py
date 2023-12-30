@@ -265,7 +265,8 @@ def fourier_toeplitz_matmul(fourier_func, func_kwargs, tensor,
     # Need to verify normalisation constant - T * length works for the SE kernel
     length = fft_M.shape[-1]  # Length of vector for which fft is computed
     freqs = torch.fft.fftfreq(length, d=dt).to(tensor.device)
-    fft_c = (fourier_func(freqs, **func_kwargs) / np.sqrt(dt)).unsqueeze(-2).expand_as(fft_M)
+    fft_c = (fourier_func(freqs, **func_kwargs) /
+             np.sqrt(dt)).unsqueeze(-2).expand_as(fft_M)
 
     fft_product = fft_M.mul_(fft_c)
 

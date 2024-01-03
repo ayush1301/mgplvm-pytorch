@@ -115,12 +115,12 @@ class LDS(GenerativeModel):
         super().__init__(v, Y, lik)
 
         # Generative parameters
-        A = torch.randn(self.ntrials, self.b, self.b).to(device)
-        C = torch.randn(self.ntrials, self.N, self.b).to(device)
-        B = torch.randn(self.ntrials, self.b, self.b).to(device)
-        mu0 = torch.randn(self.ntrials, self.b).to(device)
-        Sigma0_half = torch.eye(self.b)[None, ...].expand(self.ntrials, -1, -1).to(device)
-        sigma_x = torch.randn(self.ntrials).to(device)
+        A = torch.randn(1, self.b, self.b).to(device)
+        C = torch.randn(1, self.N, self.b).to(device)
+        B = torch.randn(1, self.b, self.b).to(device)
+        mu0 = torch.randn(1, self.b).to(device)
+        Sigma0_half = torch.eye(self.b)[None, ...].to(device)
+        sigma_x = torch.randn(1).to(device)
 
         print(A, B)
 
@@ -166,8 +166,9 @@ class LDS(GenerativeModel):
         # # print(samples.shape)
 
         samples = torch.randn(n_mc, ntrials, N, T).to(device)
-        sigma_expanded = self.sigma_x[None,:]#.expand(samples.shape[0], -1) # (n_mc, ntrials)
-        samples = sigma_expanded[... , None, None] * samples + mu[None, ...]
+        # sigma_expanded = self.sigma_x[None,:]#.expand(samples.shape[0], -1) # (n_mc, ntrials)
+        # samples = sigma_expanded[... , None, None] * samples + mu[None, ...]
+        samples = self.sigma_x * samples + mu[None, ...]
         # print(samples.shape)
 
         first = self.lik.LL(samples, Y) # (ntrials,)

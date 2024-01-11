@@ -77,7 +77,7 @@ def main(c_var=10, noise_std=0.5, prefix='gaussian', stop=40, bias_d=15, rho=1, 
                 torch.manual_seed(i)
                 mod_str = 'models/mse/' + prefix + '_{}_kernel_{}_seed_{}'.format(data_ind, kernel, i)
                 im_str = 'imgs/mse/' + prefix + '_{}_kernel_{}_seed_{}'.format(data_ind, kernel, i)
-                LL, MSE, final_loss, lat_traj = s.cross_validate(data_ind, nu=None, rho=rho, prior_ell_factor=0.8, lrate=7.5e-2, max_steps=max_steps, save_mod=mod_str, save_fig=im_str, prior_fourier_func=kernels[kernel], likelihood_kwargs={'inv_link': mgp.utils.softplus, 'd': torch.ones(s.N,)*s.d, 'fixed_c': False, 'fixed_d': False})
+                LL, MSE, final_loss, lat_traj = s.cross_validate(data_ind, nu=None, rho=rho, prior_ell_factor=0.8, lrate=7.5e-2, max_steps=max_steps, save_mod=mod_str, save_fig=im_str, prior_fourier_func=kernels[kernel], likelihood_kwargs={'inv_link': mgp.utils.softplus, 'd': torch.ones(s.N,)*s.d, 'fixed_c': True, 'fixed_d': False})
                 MSEs.append(MSE)
                 losses.append(final_loss)
                 LLs.append(LL)

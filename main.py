@@ -210,8 +210,9 @@ class LDS(GenerativeModel):
 
 
 class Poisson_noise():
-    def __init__(self, link_fn=torch.exp) -> None:
+    def __init__(self, link_fn=torch.exp, d=0, fixed_d=True) -> None:
         self.link_fn = link_fn
+        self.d = torch.nn.Parameter(torch.tensor(d), requires_grad=not fixed_d)
 
     def LL(self, x, y) -> Tensor:
         '''

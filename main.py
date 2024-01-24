@@ -52,7 +52,8 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 
         params = {
             'max_steps': 1001,
-            'burnin': 150,
+            'step_size': 100,
+            'gamma': 0.85,
             'optimizer': optim.Adam,
             'batch_size': None,
             'print_every': 1,
@@ -86,7 +87,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 
         optimizer = train_params['optimizer']
         optimizer = optimizer(self.parameters(), lr=lrate)
-        scheduler = StepLR(optimizer, step_size=100, gamma=0.85) # TODO: understand these parameters
+        scheduler = StepLR(optimizer, step_size=train_params['step_size'], gamma=train_params['gamma']) # TODO: understand these parameters
 
         LLs = []
         for i in range(max_steps):

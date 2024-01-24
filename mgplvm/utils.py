@@ -5,7 +5,8 @@ default_jitter = 1E-8
 
 
 def softplus(x):
-    return torch.log(1 + torch.exp(x))
+    # return torch.log(1 + torch.exp(x))
+    return torch.nn.functional.softplus(x)
 
 
 def inv_softplus(x):

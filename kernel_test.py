@@ -25,26 +25,48 @@ from synthetic_data import *
 import sys
 import io
 
-def main(c_var=10, noise_std=0.5, prefix='gaussian', stop=40, bias_d=15, rho=1, max_steps=2501):
-    s = SyntheticData(c_var=c_var, D=2, stop=stop, ntrials=1, N=200, d=bias_d, dt=0.02, noise='gaussian')
+def main(c_var=10, noise_std=0.5, prefix='gaussian', stop=40, bias_d=15, rho=1, max_steps=2501, poisson=False):
+    if not poisson:
+        s = SyntheticData(c_var=c_var, D=2, stop=stop, ntrials=1, N=200, d=bias_d, dt=0.02, noise='gaussian')
 
-    Y = s.get_Y(kernel='squared_exponential', s=noise_std, link=None)
-    print(np.shape(Y))
+        Y = s.get_Y(kernel='squared_exponential', s=noise_std, link=None)
+        print(np.shape(Y))
 
-    # Y2 = s.get_Y(kernel='squared_exponential', noise='gaussian', s=0.1)
-    # print(np.shape(Y))
+        # Y2 = s.get_Y(kernel='squared_exponential', noise='gaussian', s=0.1)
+        # print(np.shape(Y))
 
-    Y_e = s.get_Y(kernel='exponential', s=noise_std, link=None)
-    print(np.shape(Y_e))
+        Y_e = s.get_Y(kernel='exponential', s=noise_std, link=None)
+        print(np.shape(Y_e))
 
-    Y_matern_3_2 = s.get_Y(kernel='matern_3_2', s=noise_std, link=None)
-    print(np.shape(Y_matern_3_2))
+        Y_matern_3_2 = s.get_Y(kernel='matern_3_2', s=noise_std, link=None)
+        print(np.shape(Y_matern_3_2))
 
-    # Y_matern_5_2 = s.get_Y(kernel='matern_5_2', s=.5)
-    # print(np.shape(Y_matern_5_2))
+        # Y_matern_5_2 = s.get_Y(kernel='matern_5_2', s=.5)
+        # print(np.shape(Y_matern_5_2))
 
-    Y_rational_quadratic_1 = s.get_Y(kernel='rational_quadratic1', s=noise_std, link=None)
-    print(np.shape(Y_rational_quadratic_1))
+        Y_rational_quadratic_1 = s.get_Y(kernel='rational_quadratic1', s=noise_std, link=None)
+        print(np.shape(Y_rational_quadratic_1))
+
+    if poisson:
+        s = SyntheticData(c_var=c_var, D=2, stop=stop, ntrials=1, N=200, d=bias_d, dt=0.02, noise='poisson')
+
+        Y = s.get_Y(kernel='squared_exponential')
+        print(np.shape(Y))
+
+        # Y2 = s.get_Y(kernel='squared_exponential', noise='gaussian', s=0.1)
+        # print(np.shape(Y))
+
+        Y_e = s.get_Y(kernel='exponential')
+        print(np.shape(Y_e))
+
+        Y_matern_3_2 = s.get_Y(kernel='matern_3_2')
+        print(np.shape(Y_matern_3_2))
+
+        # Y_matern_5_2 = s.get_Y(kernel='matern_5_2', s=.5)
+        # print(np.shape(Y_matern_5_2))
+
+        Y_rational_quadratic_1 = s.get_Y(kernel='rational_quadratic1')
+        print(np.shape(Y_rational_quadratic_1))
 
     s.plot_X(save_fig='imgs/mse/' + prefix)
     s.plot_Y(save_fig='imgs/mse/' + prefix)
@@ -107,9 +129,10 @@ def main(c_var=10, noise_std=0.5, prefix='gaussian', stop=40, bias_d=15, rho=1, 
 
         lim = 100
         true_traj = s.get_lat_traj(data_ind)
-        plt.plot(true_traj[:lim,0], true_traj[:lim,1], 'k-', label='true')
+        # plt.plot(true_traj[:lim,0], true_traj[:lim,1], 'k-', label='true')
 
         for seed in range(seeds):
+            plt.plot(true_traj[:lim,0], true_traj[:lim,1], 'k-', label='true')
             for kernel, seed_dat in latent_traj_data.items():
                 lat_traj = seed_dat[seed]
                 plt.plot(lat_traj[:lim,0], lat_traj[:lim,1], '-', label='{}'.format(names[kernel]))
@@ -122,4 +145,7 @@ if __name__ == '__main__':
     # main()
     # main(c_var=1, noise_std=0.01, prefix='no_ard') # also Gaussian by mistake
     # main(c_var=10, noise_std=1, prefix='new_', stop=10, bias_d=0, rho=0.1, max_steps=1001) # also Gaussian by mistake
-    main(c_var=10, noise_std=0.5, prefix='new_', stop=40, bias_d=0, rho=0.1, max_steps=2001)
+    # main(c_var=10, noise_std=0.5, prefix='new_', stop=40, bias_d=0, rho=0.1, max_steps=2001)
+    # main(c_var=10, noise_std=0.5, prefix='poisson_', stop=10, bias_d=15, rho=0.1, max_steps=2001) # Poisson
+    # main(c_var=10, noise_std=0.05, prefix='gsmall_', stop=10, bias_d=0, rho=0.1, max_steps=2001, poisson=False) # Gaussian small variance
+    main(c_var=10, noise_std=1, prefix='gbig_', stop=10, bias_d=0, rho=0.1, max_steps=2001, poisson=False) # Gaussian big variance

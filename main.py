@@ -28,23 +28,23 @@ class MyDataset(Dataset):
 
 class GenerativeModel(Module, metaclass=abc.ABCMeta):
     def __init__(self, 
-                 v: Tensor, 
+                 z: Tensor, 
                  Y: Tensor,
                  lik) -> None:
         '''
-        v.shape = (ntrials, b, T)
+        z.shape = (ntrials, b, T)
         Y.shape = (ntrials, N, T)
         '''
         super().__init__()
-        assert v.shape[0] == Y.shape[0]
-        assert v.shape[2] == Y.shape[2]
+        assert z.shape[0] == Y.shape[0]
+        assert z.shape[2] == Y.shape[2]
 
-        self.v = v.to(device)
+        self.z = z.to(device)
         self.Y = Y.to(device)
         self.N = Y.shape[1]
         self.T = Y.shape[2]
         self.ntrials = Y.shape[0]
-        self.b = v.shape[1]
+        self.b = z.shape[1]
 
         self.lik = lik
 
@@ -74,14 +74,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
         return params
 
     def train_supervised_model(self, train_params):
-        # dataset = TensorDataset(self.v, self.Y)
-        # print(dataset[0][0].shape, dataset[0][1].shape)
-        # print(dataset.tensors[0].shape, dataset.tensors[1].shape)
-        # data = DataLoader(dataset, batch_size=train_params['batch_size'])
-        # for v, y in data:
-        #     print(v.shape, y.shape)
-
-        dataset = MyDataset(self.v, self.Y)
+        dataset = MyDataset(self.z, self.Y)
         dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], collate_fn=MyDataset.my_collate_fn)
 
         self.fit(dataloader, train_params)
@@ -97,22 +90,22 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 
         LLs = []
         for i in range(max_steps):
-            prev_v = None
-            for v, y in data: # loop over batches
-                loss = -self.joint_LL(n_mc, v, y, prev_v).mean() # TODO: should I use mean??
+            prev_z = None
+            for z, y in data: # loop over batches
+                loss = -self.joint_LL(n_mc, z, y, prev_z).mean() # TODO: should I use mean??
                 loss.backward()
                 LLs.append(-loss.item())
                 optimizer.step()
                 optimizer.zero_grad()
-                prev_v = v[..., -1] # (ntrials, b)
+                prev_z = z[..., -1] # (ntrials, b)
             scheduler.step()
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', LLs[-1])
 
 
 class LDS(GenerativeModel):
-    def __init__(self, v: Tensor, Y: Tensor, lik) -> None:
-        super().__init__(v, Y, lik)
+    def __init__(self, z: Tensor, Y: Tensor, lik) -> None:
+        super().__init__(z, Y, lik)
 
         # Generative parameters
         A = torch.randn(1, self.b, self.b).to(device)
@@ -149,21 +142,15 @@ class LDS(GenerativeModel):
         jitter = torch.eye(Sigma0.shape[-1]).to(Sigma0.device) * 1e-6
         return Sigma0 + jitter
     
-    def joint_LL(self, n_mc, v, Y, 
-                 prev_v # (ntrials, b)
+    def joint_LL(self, n_mc, z, Y, 
+                 prev_z # (ntrials, b)
                  ):
         # Natural parameters for p(x_t|v_t)
         ntrials, N, T = Y.shape # Only T is different from self.Y.shape
-        _, b, _ = v.shape
+        _, b, _ = z.shape
 
-        mu = self.C @ v # (ntrials, N, T)
+        mu = self.C @ z # (ntrials, N, T)
 
-        # R_half = torch.eye(self.N)[None, ...] * self.sigma_x[:, None, None] # (ntrials, N, N)
-        # # print(mu.shape, R_half.shape)
-        # samples = torch.randn(n_mc, self.ntrials, self.N, self.T)
-        # # After expansion, the shape is (n_mc, ntrials, N, N)
-        # samples = R_half[None, ...].expand(samples.shape[0], -1, -1, -1) @ samples + mu[None, ...]
-        # # print(samples.shape)
 
         samples = torch.randn(n_mc, ntrials, N, T).to(device)
         # sigma_expanded = self.sigma_x[None,:]#.expand(samples.shape[0], -1) # (n_mc, ntrials)
@@ -175,31 +162,24 @@ class LDS(GenerativeModel):
         # print(first.shape)
 
         ## Second term of LL
-        v0 = v[..., 0] # (ntrials, b)
-        if prev_v is None:
+        z0 = z[..., 0] # (ntrials, b)
+        if prev_z is None:
             # print(self.mu0.shape, self.Sigma0.shape)
-            second_small = MultivariateNormal(self.mu0, self.Sigma0).log_prob(v0) # (ntrials, )
+            second_small = MultivariateNormal(self.mu0, self.Sigma0).log_prob(z0) # (ntrials, )
         else:
-            # p(v_0|v_{-1})
-            mu = self.A @ prev_v[...,None] # (ntrials, b, 1)
+            # p(z_0|z_{-1})
+            mu = self.A @ prev_z[...,None] # (ntrials, b, 1)
             mu = mu[..., 0] # (ntrials, b)
             # print(mu.shape, self.Q.shape)
-            second_small = MultivariateNormal(mu, self.Q).log_prob(v0) # (ntrials, )
+            second_small = MultivariateNormal(mu, self.Q).log_prob(z0) # (ntrials, )
         # print(second_small.shape)
 
-        # Natural parameters for p(v_t|v_{t-1})
-        mus = self.A @ v[... , :-1] # (ntrials, b, T-1)
+        # Natural parameters for p(z_t|z_{t-1})
+        mus = self.A @ z[... , :-1] # (ntrials, b, T-1)
         # print(mu.shape, self.Q.shape)
 
-        # second_big = torch.zeros(ntrials).to(device)
-        # for t in range(T-1): # TODO, can we vectorize this?
-        #     dist = MultivariateNormal(mus[..., t], self.Q)
-        #     second_big += dist.log_prob(v[..., t+1])
-
-        # Replace the for loop with this code
-
         dist = MultivariateNormal(mus.transpose(-1, -2), self.Q[:, None, :, :])
-        second_big = dist.log_prob(v[..., 1:].transpose(-1,-2)).sum(dim=-1)
+        second_big = dist.log_prob(z[..., 1:].transpose(-1,-2)).sum(dim=-1)
 
 
         # print(second_big.shape)

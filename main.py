@@ -104,12 +104,20 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 
 
 class LDS(GenerativeModel):
-    def __init__(self, z: Tensor, Y: Tensor, lik) -> None:
+    def __init__(self, z: Tensor, Y: Tensor, lik, x_dim=None, link_fn=torch.exp) -> None:
         super().__init__(z, Y, lik)
+
+        self.link_fn = link_fn
+
+        if x_dim is None:
+            self.x_dim = self.b
+        else:
+            self.x_dim = x_dim
 
         # Generative parameters
         A = torch.randn(1, self.b, self.b).to(device)
-        C = torch.randn(1, self.N, self.b).to(device)
+        C = torch.randn(1, self.N, self.x_dim).to(device)
+        W = torch.randn(1, self.x_dim, self.b).to(device)
         B = torch.randn(1, self.b, self.b).to(device)
         mu0 = torch.randn(1, self.b).to(device)
         Sigma0_half = torch.eye(self.b)[None, ...].to(device)
@@ -119,6 +127,7 @@ class LDS(GenerativeModel):
 
         self.A = torch.nn.Parameter(A)
         self.C = torch.nn.Parameter(C)
+        self.W = torch.nn.Parameter(W)
         self.B = torch.nn.Parameter(B)
         self.sigma_x = torch.nn.Parameter(sigma_x)
         self.mu0 = torch.nn.Parameter(mu0)
@@ -149,19 +158,17 @@ class LDS(GenerativeModel):
         ntrials, N, T = Y.shape # Only T is different from self.Y.shape
         _, b, _ = z.shape
 
-        mu = self.C @ z # (ntrials, N, T)
+        # Calculate first term of LL (p(y_{1:T}|z_{1:T}))
+        mu = self.W @ z # (ntrials, x_dim, T)
 
-
-        samples = torch.randn(n_mc, ntrials, N, T).to(device)
-        # sigma_expanded = self.sigma_x[None,:]#.expand(samples.shape[0], -1) # (n_mc, ntrials)
-        # samples = sigma_expanded[... , None, None] * samples + mu[None, ...]
+        samples = torch.randn(n_mc, ntrials, self.x_dim, T).to(device)
         samples = self.sigma_x * samples + mu[None, ...]
         # print(samples.shape)
-
-        first = self.lik.LL(samples, Y) # (ntrials,)
+        firing_rates = self.link_fn(self.C @ samples) # (n_mc, ntrials, N, T)
+        first = self.lik.LL(firing_rates, Y) # (ntrials,)
         # print(first.shape)
 
-        ## Second term of LL
+        ## Second term of LL p(z_{1:T})
         z0 = z[..., 0] # (ntrials, b)
         if prev_z is None:
             # print(self.mu0.shape, self.Sigma0.shape)
@@ -190,16 +197,14 @@ class LDS(GenerativeModel):
 
 
 class Poisson_noise():
-    def __init__(self, link_fn=torch.exp, d=0, fixed_d=True) -> None:
-        self.link_fn = link_fn
+    def __init__(self, d=0, fixed_d=True) -> None:
         self.d = torch.nn.Parameter(torch.tensor(d), requires_grad=not fixed_d)
 
-    def LL(self, x, y) -> Tensor:
+    def LL(self, rates, y) -> Tensor:
         '''
         x.shape = (n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
-        rates = self.link_fn(x)
         dist = Poisson(rates)
         log_prob = dist.log_prob(y[None, ...]) # (n_mc, ntrials, N, T)
 

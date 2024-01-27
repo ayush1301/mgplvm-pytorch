@@ -102,6 +102,10 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             scheduler.step()
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', LLs[-1])
+    
+    def freeze_params(self):
+        for param in self.parameters():
+            param.requires_grad = False
 
 
 class LDS(GenerativeModel):
@@ -152,6 +156,10 @@ class LDS(GenerativeModel):
         jitter = torch.eye(Sigma0.shape[-1]).to(Sigma0.device) * 1e-6
         return Sigma0 + jitter
     
+    @property
+    def R(self):
+        return torch.diag_embed(self.var_x) # (1, x_dim, x_dim)
+    
     def joint_LL(self, n_mc, z, Y, 
                  prev_z # (ntrials, b)
                  ):
@@ -165,7 +173,7 @@ class LDS(GenerativeModel):
         samples = torch.randn(n_mc, ntrials, self.x_dim, T).to(device)
         samples = self.sigma_x * samples + mu[None, ...]
         # print(samples.shape)
-        firing_rates = self.link_fn(self.C @ samples) # (n_mc, ntrials, N, T)
+        firing_rates = self.link_fn(self.C[None, ...] @ samples) # (n_mc, ntrials, N, T)
         first = self.lik.LL(firing_rates, Y) # (ntrials,)
         # print(first.shape)
 
@@ -179,7 +187,7 @@ class LDS(GenerativeModel):
             mu = self.A @ prev_z[...,None] # (ntrials, b, 1)
             mu = mu[..., 0] # (ntrials, b)
             # print(mu.shape, self.Q.shape)
-            second_small = MultivariateNormal(mu, self.Q).log_prob(z0) # (ntrials, )
+            second_small = MultivariateNormal(mu, self.Q).log_prob(z0) # (ntrials, ) # TODO: consider usong scale tril for speed
         # print(second_small.shape)
 
         # Natural parameters for p(z_t|z_{t-1})

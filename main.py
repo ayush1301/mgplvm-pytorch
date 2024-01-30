@@ -120,15 +120,13 @@ class LDS(GenerativeModel):
             self.x_dim = x_dim
 
         # Generative parameters
-        A = torch.randn(1, self.b, self.b).to(device)
-        C = torch.randn(1, self.N, self.x_dim).to(device)
-        W = torch.randn(1, self.x_dim, self.b).to(device)
-        B = torch.randn(1, self.b, self.b).to(device)
-        mu0 = torch.randn(1, self.b).to(device)
-        Sigma0_half = torch.eye(self.b)[None, ...].to(device)
-        sigma_x = torch.randn(1).to(device)
-
-        print(A, B)
+        A = torch.rand(1, self.b, self.b).to(device)
+        C = torch.rand(1, self.N, self.x_dim).to(device)
+        W = torch.rand(1, self.x_dim, self.b).to(device)
+        B = torch.rand(1, self.b, self.b).to(device)
+        mu0 = torch.rand(1, self.b).to(device)
+        Sigma0_half = 0.1 * torch.eye(self.b)[None, ...].to(device)
+        sigma_x = torch.abs(torch.randn(1).to(device))
 
         self.A = torch.nn.Parameter(A)
         self.C = torch.nn.Parameter(C)
@@ -158,7 +156,9 @@ class LDS(GenerativeModel):
     
     @property
     def R(self):
-        return self.var_x * torch.eye(self.x_dim).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        R =  self.var_x * torch.eye(self.x_dim).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        jitter = torch.eye(R.shape[-1]).to(R.device) * 1e-6
+        return R + jitter
     
     # def joint_LL(self, n_mc, z, Y, 
     #              prev_z # (ntrials, b)
@@ -287,7 +287,7 @@ class Poisson_noise():
         x.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
-        dist = Poisson(rates)
+        dist = Poisson(rates + 1e-6) # TODO: is this a good idea? (adding small number to avoid log(0))
         log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
 
         avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
@@ -411,7 +411,8 @@ class RecognitionModel(Module):
         # mus is (batch_size, ntrials, b)
         # Sigmas is (batch_size, ntrials, b, b)
         # TODO: check if this is correct
-        entropy = MultivariateNormal(mus, Sigmas).entropy() # (batch_size, ntrials)
+        jitter = torch.eye(mus.shape[-1]).to(device) * 1e-2 # TODO: very high jitter
+        entropy = MultivariateNormal(mus, Sigmas + jitter).entropy() # (batch_size, ntrials)
         entropy = entropy.sum(dim=0) # sum over time
         return entropy # (ntrials,)
 
@@ -421,7 +422,8 @@ class RecognitionModel(Module):
         # Sigmas is (batch_size, ntrials, b, b)
 
         samples = torch.randn(n_mc, *mus.shape).to(device) # (n_mc, batch_size, ntrials, b)
-        Sigma_half = torch.linalg.cholesky(Sigmas) # (batch_size, ntrials, b, b)
+        jitter = torch.eye(mus.shape[-1]).to(device) * 1e-2 # TODO: very high jitter
+        Sigma_half = torch.linalg.cholesky(Sigmas + jitter) # (batch_size, ntrials, b, b)
         samples = mus[None, ...] + (Sigma_half[None, ...] @  samples[..., None]).squeeze(-1) # (n_mc, batch_size, ntrials, b)
         return samples.permute(0, 2, 3, 1) # (n_mc, ntrials, b, batch_size)
 

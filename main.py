@@ -160,50 +160,6 @@ class LDS(GenerativeModel):
         jitter = torch.eye(R.shape[-1]).to(R.device) * 1e-6
         return R + jitter
     
-    # def joint_LL(self, n_mc, z, Y, 
-    #              prev_z # (ntrials, b)
-    #              ):
-    #     # Natural parameters for p(x_t|v_t)
-    #     ntrials, N, T = Y.shape # Only T is different from self.Y.shape
-    #     _, b, _ = z.shape
-
-    #     # Calculate first term of LL (p(y_{1:T}|z_{1:T}))
-    #     mu = self.W @ z # (ntrials, x_dim, T)
-
-    #     samples = torch.randn(n_mc, ntrials, self.x_dim, T).to(device)
-    #     samples = self.sigma_x * samples + mu[None, ...]
-    #     # print(samples.shape)
-    #     firing_rates = self.link_fn(self.C[None, ...] @ samples) # (n_mc, ntrials, N, T)
-    #     first = self.lik.LL(firing_rates, Y) # (ntrials,)
-    #     # print(first.shape)
-
-    #     ## Second term of LL p(z_{1:T})
-    #     z0 = z[..., 0] # (ntrials, b)
-    #     if prev_z is None:
-    #         # print(self.mu0.shape, self.Sigma0.shape)
-    #         second_small = MultivariateNormal(self.mu0, self.Sigma0).log_prob(z0) # (ntrials, )
-    #     else:
-    #         # p(z_0|z_{-1})
-    #         mu = self.A @ prev_z[...,None] # (ntrials, b, 1)
-    #         mu = mu[..., 0] # (ntrials, b)
-    #         # print(mu.shape, self.Q.shape)
-    #         second_small = MultivariateNormal(mu, self.Q).log_prob(z0) # (ntrials, ) # TODO: consider usong scale tril for speed
-    #     # print(second_small.shape)
-
-    #     # Natural parameters for p(z_t|z_{t-1})
-    #     mus = self.A @ z[... , :-1] # (ntrials, b, T-1)
-    #     # print(mu.shape, self.Q.shape)
-
-    #     dist = MultivariateNormal(mus.transpose(-1, -2), self.Q[:, None, :, :])
-    #     second_big = dist.log_prob(z[..., 1:].transpose(-1,-2)).sum(dim=-1)
-
-
-    #     # print(second_big.shape)
-    #     second = second_small + second_big
-
-    #     return first + second
-    
-
     def joint_LL(self, 
                  n_mc, # number of samples for x
                  z, # (ntrials, b, T) OR (n_mc_z, ntrials, b, T)
@@ -265,22 +221,6 @@ class LDS(GenerativeModel):
 class Poisson_noise():
     def __init__(self, d=0, fixed_d=True) -> None:
         self.d = torch.nn.Parameter(torch.tensor(d), requires_grad=not fixed_d)
-
-    # def LL(self, rates, y) -> Tensor:
-    #     '''
-    #     x.shape = (n_mc, ntrials, N, T)
-    #     y.shape = (ntrials, N, T)
-    #     '''
-    #     dist = Poisson(rates)
-    #     log_prob = dist.log_prob(y[None, ...]) # (n_mc, ntrials, N, T)
-
-    #     # avg_log_prob = torch.mean(log_prob, dim=0)  # (ntrials, N, T)
-    #     # total_log_prob = torch.sum(avg_log_prob, dim=(1,2)) # (ntrials, )
-
-    #     avg_log_prob = torch.logsumexp(log_prob, dim=0) - np.log(log_prob.shape[0]) # (ntrials, N, T)
-    #     total_log_prob = torch.sum(avg_log_prob, dim=(1,2)) # (ntrials, )
-
-    #     return total_log_prob
         
     def LL(self, rates, y) -> Tensor:
         '''

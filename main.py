@@ -249,7 +249,7 @@ class RecognitionModel(Module):
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_layer_size, gen_model.x_dim)
         ).to(device)
-        self.smoothing = smoothing
+        self.smoothing = smoothing # TODO: implement smoothing
     
     def training_params(self, **kwargs): # code from mgp
         params = {
@@ -390,7 +390,9 @@ class RecognitionModel(Module):
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
-                prev_z = z_samples[..., -1] # (n_mc_z, ntrials, b)
+                prev_z = z_samples[..., -1].detach() # (n_mc_z, ntrials, b)
+                prev_mu = mus[-1, ...].detach() # (ntrials, b)
+                prev_Sigma = Sigmas[-1, ...].detach() # (ntrials, b, b)
             scheduler.step()
             LLs.append(-loss.item())
             if i % train_params_recognition['print_every'] == 0:

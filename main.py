@@ -76,7 +76,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 
     def train_supervised_model(self, train_params):
         dataset = MyDataset(self.z, self.Y)
-        dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], collate_fn=MyDataset.my_collate_fn)
+        dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], collate_fn=MyDataset.my_collate_fn, shuffle=False)
 
         self.fit(dataloader, train_params)
 
@@ -215,6 +215,22 @@ class LDS(GenerativeModel):
         second = second_small + second_big
 
         return first + second
+    
+    def sample_z(self, n_mc: int, prev_z=None): # Sample z from the prior of the LDS
+        # prev_z is (n_mc, ntrials, b)
+        samples = torch.zeros(n_mc, self.ntrials, self.b, self.T).to(device)
+        start_t = 0
+        if prev_z is None:
+            z0 = self.mu0[None, ...] + (self.Sigma0_half[None, ...] @ torch.randn(n_mc, self.ntrials, self.b, 1).to(device)).squeeze(-1) # (n_mc, ntrials, b)
+            samples[..., 0] = z0
+            start_t = 1
+            prev_z = z0
+        for t in range(start_t, self.T):
+            z_t = (self.A[None, ...] @ prev_z[..., None] + self.B[None, ...] @ torch.randn(n_mc, self.ntrials, self.b, 1).to(device)).squeeze(-1)
+            samples[..., t] = z_t
+            prev_z = z_t
+
+        return samples
 
 
 

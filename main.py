@@ -147,12 +147,16 @@ class LDS(GenerativeModel):
         self.C = torch.nn.Parameter(C)
         self.W = torch.nn.Parameter(W)
         self.B = torch.nn.Parameter(B, requires_grad= not trained_z)
-        self.sigma_x = torch.nn.Parameter(sigma_x)
+        self.log_sigma_x = torch.nn.Parameter(torch.log(sigma_x))
         self.mu0 = torch.nn.Parameter(mu0, requires_grad= not trained_z)
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
 
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
     
+    @property
+    def sigma_x(self):
+        return torch.exp(self.log_sigma_x)
+
     @property
     def var_x(self):
         return torch.square(self.sigma_x)

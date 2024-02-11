@@ -11,6 +11,98 @@ from torch.optim.lr_scheduler import StepLR
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
+def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True): # return all matrices independent of observations
+    # Kalman filter
+    Sigmas_filt = [] # Sigmas_filt[t] = Sigma_t^t 
+    Sigmas_diffused = [] # Sigmas_diffused[t] = Sigma_{t+1}^t
+    Sigmas_diffused_chol = torch.zeros(T - 1, b, b).to(device) # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t]
+    Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
+    Sigmas_tilde_chol = torch.zeros(T, b, b).to(device) # Sigmas_tilde_chol[t] = Cholesky of Sigmas_tilde[t]
+    Ks = [] # Ks[t] = K_t
+
+    # Sub in the first time step
+    S = torch.linalg.cholesky(R + W @ Sigma0 @ W.T) # (x_dim, x_dim)
+    K = chol_inv(S, Sigma0 @ W.T, left=False) # (b, x_dim)
+    Sigmas_filt.append(Sigma0 - K @ W @ Sigma0) # (b, b)
+    Ks.append(K)
+
+    # Remaining time steps
+    for t in range(1, T):
+        # populate Sigmas_diffused[t-1] and Sigmas_filt[t]
+        jitter = 1e-6 * torch.eye(b).to(device)
+        Sigmas_diffused.append(A @ Sigmas_filt[t-1] @ A.T + Q + jitter) # (b, b)
+        Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1]) # (b, b)
+        # K = Sigmas_diffused[t-1] @ W.T @ torch.linalg.inv(R + W @ Sigmas_diffused[t-1] @ W.T) # (b, x_dim)
+        jitter = 1e-6 * torch.eye(x_dim).to(device)
+        S = torch.linalg.cholesky(R + W @ Sigmas_diffused[t-1] @ W.T + jitter) # (x_dim, x_dim)
+        K = chol_inv(S, Sigmas_diffused[t-1] @ W.T, left=False) # (b, x_dim)
+        Sigmas_filt.append(Sigmas_diffused[t-1] - K @ W @ Sigmas_diffused[t-1]) # (b, b)
+        Ks.append(K)
+    
+    # Kalman smoother
+    if smoothing:
+        Sigmas_tilde[-1] = Sigmas_filt[-1] # (b, b)
+        Cs = torch.zeros(T- 1, b, b).to(device) # Cs[t] = C_t
+        for t in range(T - 2, -1, -1):
+            # Cs[t] = Sigmas_filt[t] @ A.T @ torch.linalg.inv(Sigmas_diffused[t]) # (b, b)
+            S = Sigmas_diffused_chol[t] # (b, b)
+            Cs[t] = chol_inv(S, Sigmas_filt[t] @ A.T, left=False) # (b, b)
+            Sigmas_tilde[t] = Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T
+            Sigmas_tilde_chol[t] = torch.linalg.cholesky(Sigmas_tilde[t] + 1e-6 * torch.eye(b).to(device)) # (b, b)
+
+        # print(torch.linalg.det(Sigmas_tilde).mean())
+
+        if get_sigma_tilde:
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde
+        else:
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
+    else:
+        return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks) # (T, b, b), (T-1, b, b), (T, b, x_dim)
+    
+def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, smoothing=True):
+    # TODO: support batching
+    n_mc_z, n_trials, x_dim, batch_size = x_hat.shape
+    _xhat = x_hat.permute(-1, 0, 1, 2) # (batch_size, n_mc_z, ntrials, x_dim)
+
+    # Kalman filter
+    mus_filt = [] # mu_filt[t] = mu_t^t # (batch_size, n_mc_z, ntrials, b)
+    mus_diffused = [] # mu_diffused[t] = mu_{t+1}^t # (batch_size-1, n_mc_z, ntrials, b)
+
+    # Sub in the first time step
+    mus_filt.append(mu0 + (Ks[0] @ (_xhat[0] - W @ mu0)[..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
+
+    start_t = 1
+
+    for t in range(start_t, batch_size):
+        # populate mus_diffused[t-1] and mus_filt[t]
+        mus_diffused.append((A @ mus_filt[t-1][..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
+        mus_filt.append(mus_diffused[t-1] + (Ks[t] @ (_xhat[t][..., None] - W @ mus_diffused[t-1][..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
+
+    # Kalman smoother
+    if smoothing:
+        mus_smooth = torch.zeros(batch_size, n_mc_z, n_trials, b).to(device) # mu_smooth[t] = mu_t^T
+        mus_smooth[-1] = mus_filt[-1] # (n_mc_z, ntrials, b)
+        for t in range(batch_size - 2, -1, -1):
+            mus_smooth[t] = mus_filt[t] + (Cs[t] @ (mus_smooth[t+1] - mus_diffused[t])[..., None]).squeeze(-1) # (n_mc_z, ntrials, b)
+            
+        return torch.stack(mus_filt), mus_smooth, torch.stack(mus_diffused) # (batch_size, n_mc_z, ntrials, b), (batch_size, n_mc_z, ntrials, b), (batch_size-1, n_mc_z, ntrials, b)
+    else:
+        return torch.stack(mus_filt), torch.stack(mus_diffused)
+    
+# returns (U @ U^T)^-1 @ x left=True, x @ (U @ U^T)^-1 left=False
+def chol_inv(u, x, left=True):
+    if left:
+        # Solve U z = x
+        u_inv_x = torch.linalg.solve_triangular(u, x, upper=False)
+        # Solve U^T y = z
+        return torch.linalg.solve_triangular(u.T, u_inv_x, upper=True)
+    else:
+        # Solve z U^T = x
+        z_u_inv = torch.linalg.solve_triangular(u.T, x, upper=True, left=False)
+        # Solve y U = z
+        return torch.linalg.solve_triangular(u, z_u_inv, upper=False, left=False)
+
 class MyDataset(Dataset):
     def __init__(self, inputs, outputs):
         self.inputs = inputs
@@ -343,69 +435,18 @@ class RecognitionModel(Module):
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model.W.squeeze(0) # (x_dim, b)
         Q = self.gen_model.Q.squeeze(0) # (b, b)
-        R = self.gen_model.R.squeeze(0) # (x_dim, x_dim)
-
-        # Kalman filter
-        Sigmas_filt = torch.zeros(T, self.gen_model.b, self.gen_model.b).to(device) # Sigmas_filt[t] = Sigma_t^t
-        Sigmas_diffused = torch.zeros(T - 1, self.gen_model.b, self.gen_model.b).to(device) # Sigmas_diffused[t] = Sigma_{t+1}^t
-        Sigmas_tilde = torch.zeros(T, self.gen_model.b, self.gen_model.b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
-        Ks = torch.zeros(T, self.gen_model.b, self.gen_model.x_dim).to(device) # Ks[t] = K_t
-
-        # Sub in the first time step
+        R = self.gen_model.R.squeeze(0)
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
-        K = Sigma0 @ W.T @ torch.linalg.inv(R + W @ Sigma0 @ W.T) # (b, x_dim)
-        Sigmas_filt[0] = Sigma0 - K @ W @ Sigma0 # (b, b)
-        Ks[0] = K
-
-        # Remaining time steps
-        for t in range(1, T):
-            Sigmas_diffused[t-1] = A @ Sigmas_filt[t-1] @ A.T + Q # (b, b)
-            K = Sigmas_diffused[t-1] @ W.T @ torch.linalg.inv(R + W @ Sigmas_diffused[t-1] @ W.T) # (b, x_dim)
-            Sigmas_filt[t] = Sigmas_diffused[t-1] - K @ W @ Sigmas_diffused[t-1] # (b, b)
-            Ks[t] = K
-        
-        # Kalman smoother
-        Sigmas_tilde[-1] = Sigmas_filt[-1] # (b, b)
-        Cs = torch.zeros(T- 1, self.gen_model.b, self.gen_model.b).to(device) # Cs[t] = C_t
-        for t in range(T - 2, -1, -1):
-            Cs[t] = Sigmas_filt[t] @ A.T @ torch.linalg.inv(Sigmas_diffused[t]) # (b, b)
-            Sigmas_tilde[t] = Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T
-
-        if get_sigma_tilde:
-            return Sigmas_filt, Sigmas_diffused, Ks, Cs, Sigmas_tilde
-        else:
-            return Sigmas_filt, Sigmas_diffused, Ks, Cs # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
-
-
+        b = self.gen_model.b
+        x_dim = self.gen_model.x_dim
+        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde)
+    
     def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor):
-        # TODO: support batching
-        n_mc_z, n_trials, x_dim, batch_size = x_hat.shape
-        _xhat = x_hat.permute(-1, 0, 1, 2) # (batch_size, n_mc_z, ntrials, x_dim)
-
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model.W.squeeze(0) # (x_dim, b)
-
-        # Kalman filter
-        mus_filt = torch.zeros(batch_size, n_mc_z, n_trials, self.gen_model.b).to(device) # mu_filt[t] = mu_t^t
-        mus_diffused = torch.zeros(batch_size-1, n_mc_z, n_trials, self.gen_model.b).to(device) # mu_diffused[t] = mu_{t+1}^t
-
-        # Sub in the first time step
+        b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
-        mus_filt[0] = mu0 + (Ks[0] @ (_xhat[0] - W @ mu0)[..., None]).squeeze(-1) # (n_mc_z, ntrials, b)
-
-        start_t = 1
-
-        for t in range(start_t, batch_size):
-            mus_diffused[t-1] = (A @ mus_filt[t-1][..., None]).squeeze(-1) # (n_mc_z, ntrials, b)
-            mus_filt[t] = mus_diffused[t-1] + (Ks[t] @ (_xhat[t][..., None] - W @ mus_diffused[t-1][..., None])).squeeze(-1) # (n_mc_z, ntrials, b)
-
-        # Kalman smoother
-        mus_smooth = torch.zeros(batch_size, n_mc_z, n_trials, self.gen_model.b).to(device) # mu_smooth[t] = mu_t^T
-        mus_smooth[-1] = mus_filt[-1] # (n_mc_z, ntrials, b)
-        for t in range(batch_size - 2, -1, -1):
-            mus_smooth[t] = mus_filt[t] + (Cs[t] @ (mus_smooth[t+1] - mus_diffused[t])[..., None]).squeeze(-1) # (n_mc_z, ntrials, b)
-            
-        return mus_filt, mus_smooth, mus_diffused # (batch_size, n_mc_z, ntrials, b), (batch_size, n_mc_z, ntrials, b), (batch_size-1, n_mc_z, ntrials, b)
+        return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs)
     
 
     def entropy(self, samples, mus_filt, mus_diffused, Cs, Sigmas_tilde):
@@ -493,3 +534,147 @@ class RecognitionModel(Module):
         plt.ylabel('LL')
         plt.show()
 
+class Preprocessor(Module):
+    def __init__(self, v: Tensor, z_dim: int) -> None:
+        # Generative parameters
+        # z_t = A z_{t-1} + B w_t
+        # v_t = W z_t + varepsilon_t
+
+        super(Preprocessor, self).__init__()
+        self.v = v.to(device) # (ntrials, v_dim, T)
+        self.T = v.shape[-1]
+        self.v_dim = v.shape[1]
+        self.z_dim = z_dim # dimension of the latent space
+
+        self.A = torch.nn.Parameter(torch.rand(self.z_dim, self.z_dim).to(device))
+        self.B = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
+        self.W = torch.nn.Parameter(torch.rand(self.v_dim, self.z_dim).to(device))
+        self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
+        self.Sigma0_half = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
+        self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
+
+    @property
+    def sigma_v(self):
+        return torch.exp(self.log_sigma_v)
+    
+    @property
+    def var_v(self):
+        return torch.square(self.sigma_v)
+    
+    @property
+    def R(self):
+        jitter = torch.eye(self.v_dim).to(self.sigma_v.device) * 1e-6
+        return self.var_v * torch.eye(self.v_dim).to(device) + jitter
+    
+    @property
+    def Q(self):
+        self.B.data = torch.tril(self.B.data)
+        jitter = torch.eye(self.z_dim).to(self.B.device) * 1e-6
+        return self.B @ self.B.T + jitter
+    
+    @property
+    def Sigma0(self):
+        self.Sigma0_half.data = torch.tril(self.Sigma0_half.data)
+        jitter = torch.eye(self.z_dim).to(self.Sigma0_half.device) * 1e-6
+        return self.Sigma0_half @ self.Sigma0_half.T + jitter
+    
+
+    def training_params(self, **kwargs): # code from mgp
+
+        params = {
+            'max_steps': 1001,
+            'step_size': 100,
+            'gamma': 0.85,
+            'optimizer': optim.Adam,
+            'batch_size': None,
+            'print_every': 1,
+            'lrate': 5E-2,
+            'accumulate_gradient': True,
+            'batch_mc': None
+        }
+
+        for key, value in kwargs.items():
+            if key in params.keys():
+                params[key] = value
+            else:
+                print('adding', key)
+
+        if params['batch_size'] is None:
+            params['batch_size'] = self.T
+
+        return params
+    
+    def kalman_covariance(self, T=None): # return all matrices independent of observations
+        if T is None:
+            T = self.T
+        _, Sigmas_diffused, Ks = general_kalman_covariance(self.A, self.W, self.Q, self.R, self.z_dim, self.v_dim, self.Sigma0, T, smoothing=False)
+        return Sigmas_diffused, Ks
+    
+    def kalman_means(self, v: Tensor, Ks: Tensor):
+        _, mus_diffused = general_kalman_means(self.A, self.W, self.z_dim, self.mu0, v[None, ...], Ks, Cs=None, smoothing=False)
+        return mus_diffused.squeeze(1) # (T, ntrials, z_dim)
+
+    def train_preprocessor(self, train_params):
+        # So that the last dimension is the batch dimension
+        transposed_v = self.v.transpose(0, -1) # (T, v_dim, ntrials)
+        dataloader = DataLoader(transposed_v, batch_size=train_params['batch_size'])
+
+        self.fit(dataloader, train_params)
+    
+    def fit(self, data: DataLoader, train_params):
+        lrate = train_params['lrate']
+        max_steps = train_params['max_steps']
+
+        optimizer = train_params['optimizer']
+        optimizer = optimizer(self.parameters(), lr=lrate)
+        scheduler = StepLR(optimizer, step_size=train_params['step_size'], gamma=train_params['gamma'])
+
+        self.LLs = []
+        for i in range(max_steps):
+            for v_transposed in data:
+                optimizer.zero_grad()
+                v = v_transposed.transpose(-1, 0) # (ntrials, v_dim, batch_size)
+                Sigmas_diffused, Ks = self.kalman_covariance() # (T-1, z_dim, z_dim), (T, z_dim, v_dim)
+                mus_diffused = self.kalman_means(v, Ks) # (T, ntrials, z_dim)
+                loss = -self.LL(v, mus_diffused, Sigmas_diffused).mean()
+                loss.backward()
+                optimizer.step()
+                self.LLs.append(-loss.item())
+            scheduler.step()
+            if i % train_params['print_every'] == 0:
+                print('step', i, 'LL', self.LLs[-1])
+
+    def LL(self, v: Tensor, mus_diffused, Sigmas_diffused):
+        # v is (ntrials, v_dim, T)
+        # return log likelihood of v
+        # mus_diffused is (T, ntrials, z_dim)
+        # Sigmas_diffused is (T, z_dim, z_dim)
+        ntrials = v.shape[0]
+        T = v.shape[-1]
+
+        # ln p(v_1)
+        m = self.W @ self.mu0
+        cov = self.W @ self.Sigma0 @ self.W.T + self.R
+        dist = MultivariateNormal(m, cov)
+        first = dist.log_prob(v[..., 0]) # (ntrials, )
+
+        # ln p(v_t|v_{1: t-1})
+        ts = torch.arange(1, T).to(device)
+        ms = (self.W @ mus_diffused[ts - 1][..., None]).squeeze(-1) # (T-1, ntrials, v_dim)
+        jitter = torch.eye(self.v_dim).to(self.R.device) * 1e-6
+        covs = self.W @ Sigmas_diffused[ts - 1] @ self.W.T + self.R + jitter # (T-1, v_dim, v_dim)
+        covs_chol = torch.linalg.cholesky(covs)
+        dists = MultivariateNormal(ms, scale_tril=covs_chol[:, None, ...])
+        second = dists.log_prob(v.permute(2, 0, 1)[1:, ...]) # (T-1, ntrials)
+
+        return first + second.sum(dim=0) # (ntrials, )
+    
+    def plot_LL(self):
+        plt.plot(self.LLs)
+        plt.xlabel('Step')
+        plt.ylabel('LL')
+        plt.show()
+
+    def freeze_params(self):
+        for param in self.parameters():
+            param.requires_grad = False

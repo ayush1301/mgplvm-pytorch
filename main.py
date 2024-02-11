@@ -3,7 +3,9 @@ import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 import abc
-from torch.distributions import MultivariateNormal, Poisson
+from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial
+from itertools import chain
+import torch.distributions as dists
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.nn import Module
@@ -178,7 +180,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
         max_steps = train_params['max_steps']
 
         optimizer = train_params['optimizer']
-        optimizer = optimizer(self.parameters(), lr=lrate)
+        optimizer = optimizer(self.prms, lr=lrate)
         scheduler = StepLR(optimizer, step_size=train_params['step_size'], gamma=train_params['gamma']) # TODO: understand these parameters
 
         self.LLs = []
@@ -195,8 +197,12 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
     
+    @property
+    def prms(self):
+        return chain(self.parameters(), self.lik.parameters())
+    
     def freeze_params(self):
-        for param in self.parameters():
+        for param in self.prms:
             param.requires_grad = False
 
     def plot_LL(self):
@@ -344,9 +350,40 @@ class LDS(GenerativeModel):
         return samples
 
 
+class Noise(Module, abc.ABC):
+    def __init__(self) -> None:
+        super().__init__()
 
-class Poisson_noise():
+class Negative_binomial_noise(Noise):
+    def __init__(self, Y: Tensor) -> None:
+        super().__init__()
+        # ntrials, N, T = Y.shape
+        total_count = torch.tensor(torch.mean(Y, dim=(0, 2))).to(device) # (N, )
+        total_count = dists.transform_to(
+            dists.constraints.greater_than_eq(0)).inv(total_count)
+        self._total_count = torch.nn.Parameter(total_count)
+    
+    @property
+    def total_count(self):
+        return dists.transform_to(dists.constraints.greater_than_eq(0))(
+            self._total_count)
+    
+    def LL(self, rates, y) -> Tensor:
+        '''
+        x.shape = (n_mc_z, n_mc, ntrials, N, T)
+        y.shape = (ntrials, N, T)
+        '''
+        dist = NegativeBinomial(total_count=self.total_count[None, None, None, :, None], logits=rates)
+        log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
+
+        avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
+        total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
+
+        return total_log_prob
+        
+class Poisson_noise(Noise):
     def __init__(self, d=0, fixed_d=True) -> None:
+        super().__init__()
         self.d = torch.nn.Parameter(torch.tensor(d), requires_grad=not fixed_d)
         
     def LL(self, rates, y) -> Tensor:
@@ -362,7 +399,7 @@ class Poisson_noise():
 
         return total_log_prob
 
-class Gaussian_noise():
+class Gaussian_noise(Noise):
     def __init__(self, sigma) -> None:
         self.sigma = sigma
 

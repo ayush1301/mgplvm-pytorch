@@ -227,19 +227,45 @@ class LDS(GenerativeModel):
 
         # Generative parameters
         if A is None:
-            A = torch.rand(1, self.b, self.b).to(device)
+            # A = torch.rand(1, self.b, self.b).to(device)
+            A = torch.eye(self.b)[None, ...].to(device)
         if C is None:
-            C = torch.rand(1, self.N, self.x_dim).to(device)
+            # C = torch.rand(1, self.N, self.x_dim).to(device)
+            # Create an identity matrix of size x_dim
+            identity = torch.eye(self.x_dim).to(device)
+
+            # Repeat the identity matrix N//x_dim times
+            C = identity.repeat(self.N//self.x_dim, 1)
+
+            # If N is not a multiple of x_dim, append the remaining rows with zeros
+            if self.N % self.x_dim != 0:
+                zeros = torch.zeros((self.N % self.x_dim, self.x_dim)).to(device)
+                C = torch.cat((C, zeros))
+
+            # Reshape C to have shape (1, N, x_dim)
+            C = C.unsqueeze(0)
+
         if W is None:
-            W = torch.rand(1, self.x_dim, self.b).to(device)
+            # W = torch.rand(1, self.x_dim, self.b).to(device)
+            # Create an identity matrix of size x_dim
+            identity = torch.eye(self.x_dim).to(device)
+
+            # Slice the identity matrix to get the first b columns
+            W = identity[:, :self.b]
+
+            # Reshape W to have shape (1, x_dim, b)
+            W = W.unsqueeze(0)
         if B is None:
-            B = torch.rand(1, self.b, self.b).to(device)
+            # B = torch.rand(1, self.b, self.b).to(device)
+            B = torch.eye(self.b)[None, ...].to(device)
         if mu0 is None:
-            mu0 = torch.rand(1, self.b).to(device)
+            # mu0 = torch.rand(1, self.b).to(device)
+            mu0 = torch.zeros(self.b).to(device)
         if Sigma0_half is None:
             Sigma0_half = 0.1 * torch.eye(self.b)[None, ...].to(device)
         if sigma_x is None:
-            sigma_x = torch.abs(torch.randn(1).to(device))
+            # sigma_x = torch.abs(torch.randn(1).to(device))
+            sigma_x = torch.tensor(0.1).to(device)
 
         self.A = torch.nn.Parameter(A, requires_grad= not trained_z)
         self.C = torch.nn.Parameter(C)

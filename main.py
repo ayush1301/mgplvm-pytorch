@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 import abc
-from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial
+from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial, Normal
 from itertools import chain
 import torch.distributions as dists
 from torch import optim
@@ -354,6 +354,16 @@ class Noise(Module, abc.ABC):
     def __init__(self) -> None:
         super().__init__()
 
+    def general_LL(self, dist, y):
+        # y.shape = (ntrials, N, T)
+        log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
+
+        avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
+        total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
+
+        return total_log_prob
+
+
 class Negative_binomial_noise(Noise):
     def __init__(self, Y: Tensor) -> None:
         super().__init__()
@@ -370,16 +380,11 @@ class Negative_binomial_noise(Noise):
     
     def LL(self, rates, y) -> Tensor:
         '''
-        x.shape = (n_mc_z, n_mc, ntrials, N, T)
+        rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = NegativeBinomial(total_count=self.total_count[None, None, None, :, None], logits=rates)
-        log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
-
-        avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
-        total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
-
-        return total_log_prob
+        return self.general_LL(dist, y)
         
 class Poisson_noise(Noise):
     def __init__(self, d=0, fixed_d=True) -> None:
@@ -388,20 +393,28 @@ class Poisson_noise(Noise):
         
     def LL(self, rates, y) -> Tensor:
         '''
-        x.shape = (n_mc_z, n_mc, ntrials, N, T)
+        rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = Poisson(rates + 1e-6) # TODO: is this a good idea? (adding small number to avoid log(0))
-        log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
-
-        avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
-        total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2)) # (ntrials, )
-
-        return total_log_prob
+        return self.general_LL(dist, y)
 
 class Gaussian_noise(Noise):
-    def __init__(self, sigma) -> None:
-        self.sigma = sigma
+    def __init__(self, sigma: float) -> None:
+        super().__init__()
+        self.log_sigma = torch.nn.Parameter(torch.tensor(np.log(sigma)).to(device))
+
+    @property
+    def sigma(self):
+        return torch.exp(self.log_sigma)
+    
+    def LL(self, rates, y) -> Tensor:
+        '''
+        rates.shape = (n_mc_z, n_mc, ntrials, N, T)
+        y.shape = (ntrials, N, T)
+        '''
+        dist = Normal(rates, self.sigma)
+        return self.general_LL(dist, y)
 
 class RecognitionModel(Module):
     def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, smoothing: bool = False, neural_net=None) -> None:
@@ -429,7 +442,8 @@ class RecognitionModel(Module):
             'n_mc_x': 32,
             'n_mc_z': 32,
             'accumulate_gradient': True,
-            'batch_mc': None
+            'batch_mc_x': None,
+            'batch_mc_z': None
         }
 
         for key, value in kwargs.items():
@@ -510,6 +524,8 @@ class RecognitionModel(Module):
         lrate = train_params_recognition['lrate']
         n_mc_x = train_params_recognition['n_mc_x']
         n_mc_z = train_params_recognition['n_mc_z']
+        batch_mc_x = train_params_recognition['batch_mc_x']
+        batch_mc_z = train_params_recognition['batch_mc_z']
         max_steps = train_params_recognition['max_steps']
 
         optimizer = train_params_recognition['optimizer']

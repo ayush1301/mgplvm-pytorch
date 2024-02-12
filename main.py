@@ -443,8 +443,7 @@ class RecognitionModel(Module):
             'n_mc_x': 32,
             'n_mc_z': 32,
             'accumulate_gradient': True,
-            'batch_mc_x': None,
-            'batch_mc_z': None
+            'batch_mc_z': None,
         }
 
         for key, value in kwargs.items():
@@ -525,13 +524,20 @@ class RecognitionModel(Module):
         lrate = train_params_recognition['lrate']
         n_mc_x = train_params_recognition['n_mc_x']
         n_mc_z = train_params_recognition['n_mc_z']
-        batch_mc_x = train_params_recognition['batch_mc_x']
         batch_mc_z = train_params_recognition['batch_mc_z']
         max_steps = train_params_recognition['max_steps']
+        accumulate_gradient = train_params_recognition['accumulate_gradient']
 
         optimizer = train_params_recognition['optimizer']
         optimizer = optimizer(self.neural_net.parameters(), lr=lrate)
         scheduler = StepLR(optimizer, step_size=train_params_recognition['step_size'], gamma=train_params_recognition['gamma'])
+
+        if batch_mc_z is None:
+            batch_mc_z = n_mc_z
+        mc_batches = [batch_mc_z for _ in range(n_mc_z // batch_mc_z)]
+        if (n_mc_z % batch_mc_z) > 0:
+            mc_batches.append(n_mc_z % batch_mc_z)
+        assert np.sum(mc_batches) == n_mc_z
 
         self.LLs = []
         _ , _, Ks, Cs, Sigmas_tilde = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
@@ -540,20 +546,35 @@ class RecognitionModel(Module):
             prev_mu = None
             prev_Sigma = None
             prev_z = None
-            for y in data: # loop over batches
-                # NN pseudo observations
-                y = y.transpose(-1, 0) # (ntrials, N, batch_size)
-                x_tilde = self.get_x_tilde(y) # (ntrials, x_dim, batch_size)
-                # Matheron psuedo observations
-                matheron_pert = self.sample_matheron_pert(n_mc_z) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
-                x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
-                loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde).mean() # TODO: should I use mean??
-                loss.backward()
+            for batch_mc_z in mc_batches:
+                mc_weight = batch_mc_z / n_mc_z # fraction of the total samples
+                for y in data: # loop over batches TODO
+                    # NN pseudo observations
+                    y = y.transpose(-1, 0) # (ntrials, N, batch_size)
+                    x_tilde = self.get_x_tilde(y) # (ntrials, x_dim, batch_size)
+
+                    # Matheron psuedo observations
+                    matheron_pert = self.sample_matheron_pert(batch_mc_z) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
+                    x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
+                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde).mean() # TODO: should I use mean??
+
+                    if accumulate_gradient:
+                        loss = loss * mc_weight
+
+                    loss.backward()
+
+                    if not accumulate_gradient:
+                        optimizer.step()
+                        optimizer.zero_grad()
+
+                    # prev_z = z_samples[..., -1].detach() # (n_mc_z, ntrials, b)
+                    # prev_mu = mus[-1, ...].detach() # (ntrials, b)
+                    # prev_Sigma = Sigmas[-1, ...].detach() # (ntrials, b, b)
+                        
+            if accumulate_gradient:
                 optimizer.step()
                 optimizer.zero_grad()
-                # prev_z = z_samples[..., -1].detach() # (n_mc_z, ntrials, b)
-                # prev_mu = mus[-1, ...].detach() # (ntrials, b)
-                # prev_Sigma = Sigmas[-1, ...].detach() # (ntrials, b, b)
+                
             scheduler.step()
             self.LLs.append(-loss.item())
             if i % train_params_recognition['print_every'] == 0:

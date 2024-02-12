@@ -404,16 +404,18 @@ class Gaussian_noise(Noise):
         self.sigma = sigma
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, smoothing: bool = False):
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, smoothing: bool = False, neural_net=None) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
-        self.neural_net = torch.nn.Sequential(
-            torch.nn.Linear(gen_model.N, hidden_layer_size),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_layer_size, gen_model.x_dim)
-        ).to(device)
-        self.smoothing = smoothing # TODO: implement smoothing
+        if neural_net is None:
+            self.neural_net = torch.nn.Sequential(
+                torch.nn.Linear(gen_model.N, hidden_layer_size),
+                torch.nn.ReLU(),
+                torch.nn.Linear(hidden_layer_size, gen_model.x_dim)
+            ).to(device)
+        else:
+            self.neural_net = neural_net.to(device)
     
     def training_params(self, **kwargs): # code from mgp
         params = {

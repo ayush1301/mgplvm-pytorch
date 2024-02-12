@@ -215,7 +215,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 class LDS(GenerativeModel):
     def __init__(self, z: Tensor, Y: Tensor, lik, x_dim=None, link_fn=torch.exp,
                  A=None, C=None, W=None, B=None, mu0=None, Sigma0_half=None, sigma_x=None,
-                 trained_z=False) -> None:
+                 trained_z=False, d=0., fixed_d=True) -> None:
         super().__init__(z, Y, lik)
 
         self.link_fn = link_fn
@@ -248,6 +248,7 @@ class LDS(GenerativeModel):
         self.log_sigma_x = torch.nn.Parameter(torch.log(sigma_x))
         self.mu0 = torch.nn.Parameter(mu0, requires_grad= not trained_z)
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
+        self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
 
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
     
@@ -300,7 +301,7 @@ class LDS(GenerativeModel):
         samples = torch.randn(n_mc, n_mc_z, ntrials, self.x_dim, T).to(device)
         samples = self.sigma_x * samples + mu[None, ...]
         # print(samples.shape)
-        firing_rates = self.link_fn(C[None, ...] @ samples) # (n_mc_z, n_mc, ntrials, N, T)
+        firing_rates = self.link_fn(C[None, ...] @ samples + self.d) # (n_mc_z, n_mc, ntrials, N, T)
         first = self.lik.LL(firing_rates, Y) # (ntrials,)
         # print(first.shape)
 
@@ -388,9 +389,8 @@ class Negative_binomial_noise(Noise):
         return self.general_LL(dist, y)
         
 class Poisson_noise(Noise):
-    def __init__(self, d=0, fixed_d=True) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.d = torch.nn.Parameter(torch.tensor(d), requires_grad=not fixed_d)
         
     def LL(self, rates, y) -> Tensor:
         '''

@@ -444,17 +444,31 @@ class Gaussian_noise(Noise):
         dist = Normal(rates, self.sigma)
         return self.general_LL(dist, y)
 
+class RNNModel(Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(RNNModel, self).__init__()
+        self.rnn = torch.nn.RNN(input_size, hidden_size, batch_first=True)
+        self.fc = torch.nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        out, _ = self.rnn(x)
+        out = self.fc(out)
+        return out
+
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, smoothing: bool = False, neural_net=None) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
         if neural_net is None:
-            self.neural_net = torch.nn.Sequential(
-                torch.nn.Linear(gen_model.N, hidden_layer_size),
-                torch.nn.ReLU(),
-                torch.nn.Linear(hidden_layer_size, gen_model.x_dim)
-            ).to(device)
+            if rnn:
+                self.neural_net = RNNModel(gen_model.N, hidden_layer_size, gen_model.x_dim).to(device)
+            else:
+                self.neural_net = torch.nn.Sequential(
+                    torch.nn.Linear(gen_model.N, hidden_layer_size),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(hidden_layer_size, gen_model.x_dim)
+                ).to(device)
         else:
             self.neural_net = neural_net.to(device)
     

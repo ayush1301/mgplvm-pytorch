@@ -187,14 +187,17 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
         self.LLs = []
         for i in range(max_steps):
             prev_z = None
+            loss_vals = []
             for z, y in data: # loop over batches
                 loss = -self.joint_LL(n_mc, z, y, prev_z).mean() # TODO: should I use mean??
                 loss.backward()
-                self.LLs.append(-loss.item())
+                loss_vals.append(loss.item())
                 optimizer.step()
                 optimizer.zero_grad()
                 prev_z = z[..., -1] # (ntrials, b)
             scheduler.step()
+            Z = self.T * self.ntrials * self.N + self.T * self.ntrials * self.b # TODO: check this
+            self.LLs.append(-np.sum(loss_vals)/Z)
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
     

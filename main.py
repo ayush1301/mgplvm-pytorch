@@ -51,7 +51,9 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             S = Sigmas_diffused_chol[t] # (b, b)
             Cs[t] = chol_inv(S, Sigmas_filt[t] @ A.T, left=False) # (b, b)
             Sigmas_tilde[t] = Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T
-            Sigmas_tilde_chol[t] = torch.linalg.cholesky(Sigmas_tilde[t] + 1e-6 * torch.eye(b).to(device)) # (b, b)
+            # # print min eigenvalue of Sigmas_tilde[t]
+            # print(torch.linalg.eigvals(Sigmas_tilde[t]))
+            # Sigmas_tilde_chol[t] = torch.linalg.cholesky(Sigmas_tilde[t] + 1e-4 * torch.eye(b).to(device)) # (b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
 
@@ -541,7 +543,9 @@ class RecognitionModel(Module):
         t_values = torch.arange(batch_size - 2, -1, -1)
         mus_tilde[t_values] = mus_filt[t_values] + (Cs[:, None, None, ...][t_values] @ (samples[t_values + 1] - mus_diffused[t_values])[..., None]).squeeze(-1)
         
-        dist = MultivariateNormal(mus_tilde, covariance_matrix=Sigmas_tilde[:, None, None, ...])
+        chol = torch.linalg.cholesky(Sigmas_tilde + 1e-4 * torch.eye(b).to(device)) # (batch_size, b, b)
+        dist = MultivariateNormal(mus_tilde, scale_tril=chol[:, None, None, ...])
+        # dist = MultivariateNormal(mus_tilde, covariance_matrix=Sigmas_tilde[:, None, None, ...])
         log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
         return -log_prob.mean(dim=0) # (ntrials,)
 
@@ -569,6 +573,7 @@ class RecognitionModel(Module):
         _ , _, Ks, Cs, Sigmas_tilde = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
         for i in range(max_steps):
+            loss_vals = []
             prev_mu = None
             prev_Sigma = None
             prev_z = None
@@ -582,10 +587,11 @@ class RecognitionModel(Module):
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
-                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde).mean() # TODO: should I use mean??
+                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde).sum()
 
                     if accumulate_gradient:
                         loss = loss * mc_weight
+                    loss_vals.append(loss.item())
 
                     loss.backward()
 
@@ -602,7 +608,8 @@ class RecognitionModel(Module):
                 optimizer.zero_grad()
                 
             scheduler.step()
-            self.LLs.append(-loss.item())
+            Z = self.gen_model.T * self.gen_model.ntrials * self.gen_model.N
+            self.LLs.append(-np.sum(loss_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
 

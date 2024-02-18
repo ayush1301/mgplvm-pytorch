@@ -20,7 +20,6 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     Sigmas_diffused = [] # Sigmas_diffused[t] = Sigma_{t+1}^t
     Sigmas_diffused_chol = torch.zeros(T - 1, b, b).to(device) # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t]
     Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
-    Sigmas_tilde_chol = torch.zeros(T, b, b).to(device) # Sigmas_tilde_chol[t] = Cholesky of Sigmas_tilde[t]
     Ks = [] # Ks[t] = K_t
 
     # Sub in the first time step
@@ -53,12 +52,12 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             Sigmas_tilde[t] = Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T
             # # print min eigenvalue of Sigmas_tilde[t]
             # print(torch.linalg.eigvals(Sigmas_tilde[t]))
-            # Sigmas_tilde_chol[t] = torch.linalg.cholesky(Sigmas_tilde[t] + 1e-4 * torch.eye(b).to(device)) # (b, b)
+        Sigmas_tilde_chol = torch.linalg.cholesky(Sigmas_tilde + 1e-4 * torch.eye(b).to(device)) # (b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
 
         if get_sigma_tilde:
-            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde_chol
         else:
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
     else:
@@ -530,12 +529,12 @@ class RecognitionModel(Module):
         return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs)
     
 
-    def entropy(self, samples, mus_filt, mus_diffused, Cs, Sigmas_tilde):
+    def entropy(self, samples, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol):
         # samples is (batch_size, n_mc_z, ntrials, b)
         # mus_filt is (batch_size, n_mc_z, ntrials, b)
         # mus_diffused is (batch_size-1, n_mc_z, ntrials, b)
         # Cs is (batch_size-1, b, b)
-        # Sigmas_tilde is (batch_size, b, b)
+        # Sigmas_tilde_chol is (batch_size, b, b)
 
         batch_size, n_mc_z, n_trials, b = samples.shape
         mus_tilde = torch.zeros(batch_size, n_mc_z, n_trials, b).to(device) # mu_tilde[t] = E[z_t|z_{t+1:T}, y_{1:T}]
@@ -543,8 +542,7 @@ class RecognitionModel(Module):
         t_values = torch.arange(batch_size - 2, -1, -1)
         mus_tilde[t_values] = mus_filt[t_values] + (Cs[:, None, None, ...][t_values] @ (samples[t_values + 1] - mus_diffused[t_values])[..., None]).squeeze(-1)
         
-        chol = torch.linalg.cholesky(Sigmas_tilde + 1e-4 * torch.eye(b).to(device)) # (batch_size, b, b)
-        dist = MultivariateNormal(mus_tilde, scale_tril=chol[:, None, None, ...])
+        dist = MultivariateNormal(mus_tilde, scale_tril=Sigmas_tilde_chol[:, None, None, ...])
         # dist = MultivariateNormal(mus_tilde, covariance_matrix=Sigmas_tilde[:, None, None, ...])
         log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
         return -log_prob.mean(dim=0) # (ntrials,)
@@ -570,7 +568,7 @@ class RecognitionModel(Module):
         assert np.sum(mc_batches) == n_mc_z
 
         self.LLs = []
-        _ , _, Ks, Cs, Sigmas_tilde = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
         for i in range(max_steps):
             loss_vals = []
@@ -587,7 +585,7 @@ class RecognitionModel(Module):
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
-                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde).sum()
+                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol).sum()
 
                     if accumulate_gradient:
                         loss = loss * mc_weight
@@ -613,13 +611,13 @@ class RecognitionModel(Module):
             if i % train_params_recognition['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
 
-    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde: Tensor):
+    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
         # y is (ntrials, N, batch_size)
         # x_hat is (n_mc_z, ntrials, x_dim, batch_size)
 
         # mus_smooth are the samples from the posterior through matheron sampling
         mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs)
-        entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde) # (ntrials,)
+        entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
         joint_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None) # (ntrials,) # TODO: batching
         return entropy + joint_LL
     

@@ -13,6 +13,11 @@ from torch.optim.lr_scheduler import StepLR
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+def make_symmetric(m: Tensor):
+    return (m + m.T)/2
+
+def is_symmetric(matrix):
+    return torch.all(matrix == matrix.T)
 
 def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True): # return all matrices independent of observations
     # Kalman filter
@@ -22,23 +27,28 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
     Ks = [] # Ks[t] = K_t
 
+    # print if Q, R, Sigma0 are not symmetric
+    if not (is_symmetric(Q) and is_symmetric(R) and is_symmetric(Sigma0)):
+        print('assymetry in cov!!')
+
     # Sub in the first time step
     S = torch.linalg.cholesky(R + W @ Sigma0 @ W.T) # (x_dim, x_dim)
     K = chol_inv(S, Sigma0 @ W.T, left=False) # (b, x_dim)
-    Sigmas_filt.append(Sigma0 - K @ W @ Sigma0) # (b, b)
+    Sigmas_filt.append(make_symmetric(Sigma0 - K @ W @ Sigma0)) # (b, b)
     Ks.append(K)
 
     # Remaining time steps
     for t in range(1, T):
         # populate Sigmas_diffused[t-1] and Sigmas_filt[t]
         jitter = 1e-6 * torch.eye(b).to(device)
-        Sigmas_diffused.append(A @ Sigmas_filt[t-1] @ A.T + Q + jitter) # (b, b)
-        Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1]) # (b, b)
+        Sigmas_diffused.append(make_symmetric(A @ Sigmas_filt[t-1] @ A.T + Q))
+        Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter) # (b, b)
+
         # K = Sigmas_diffused[t-1] @ W.T @ torch.linalg.inv(R + W @ Sigmas_diffused[t-1] @ W.T) # (b, x_dim)
         jitter = 1e-6 * torch.eye(x_dim).to(device)
         S = torch.linalg.cholesky(R + W @ Sigmas_diffused[t-1] @ W.T + jitter) # (x_dim, x_dim)
         K = chol_inv(S, Sigmas_diffused[t-1] @ W.T, left=False) # (b, x_dim)
-        Sigmas_filt.append(Sigmas_diffused[t-1] - K @ W @ Sigmas_diffused[t-1]) # (b, b)
+        Sigmas_filt.append(make_symmetric(Sigmas_diffused[t-1] - K @ W @ Sigmas_diffused[t-1])) # (b, b)
         Ks.append(K)
     
     # Kalman smoother
@@ -49,7 +59,7 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             # Cs[t] = Sigmas_filt[t] @ A.T @ torch.linalg.inv(Sigmas_diffused[t]) # (b, b)
             S = Sigmas_diffused_chol[t] # (b, b)
             Cs[t] = chol_inv(S, Sigmas_filt[t] @ A.T, left=False) # (b, b)
-            Sigmas_tilde[t] = Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T
+            Sigmas_tilde[t] = make_symmetric(Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T)
             # # print min eigenvalue of Sigmas_tilde[t]
             # print(torch.linalg.eigvals(Sigmas_tilde[t]))
         Sigmas_tilde_chol = torch.linalg.cholesky(Sigmas_tilde + 1e-4 * torch.eye(b).to(device)) # (b, b)

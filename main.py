@@ -199,7 +199,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             prev_z = None
             loss_vals = []
             for z, y in data: # loop over batches
-                loss = -self.joint_LL(n_mc, z, y, prev_z).mean() # TODO: should I use mean??
+                loss = -self.joint_LL(n_mc, z, y, prev_z).sum() # TODO: should I use mean??
                 loss.backward()
                 loss_vals.append(loss.item())
                 optimizer.step()

@@ -374,18 +374,18 @@ class LDS(GenerativeModel):
 
         return first + second
     
-    def sample_z(self, n_mc: int, prev_z=None): # Sample z from the prior of the LDS
+    def sample_z(self, n_mc: int, trials, prev_z=None): # Sample z from the prior of the LDS
         # prev_z is (n_mc, ntrials, b)
-        samples = torch.zeros(n_mc, self.ntrials, self.b, self.T).to(device)
+        samples = torch.zeros(n_mc, trials, self.b, self.T).to(device)
         start_t = 0
         if prev_z is None:
             # TODO: optimise cholesky?
-            z0 = self.mu0[None, ...] + (torch.linalg.cholesky(self.Sigma0)[None, ...] @ torch.randn(n_mc, self.ntrials, self.b, 1).to(device)).squeeze(-1) # (n_mc, ntrials, b)
+            z0 = self.mu0[None, ...] + (torch.linalg.cholesky(self.Sigma0)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1) # (n_mc, ntrials, b)
             samples[..., 0] = z0
             start_t = 1
             prev_z = z0
         for t in range(start_t, self.T):
-            z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, self.ntrials, self.b, 1).to(device)).squeeze(-1)
+            z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
             samples[..., t] = z_t
             prev_z = z_t
 
@@ -507,7 +507,7 @@ class RecognitionModel(Module):
                 print('adding', key)
 
         if params['batch_size'] is None:
-            params['batch_size'] = self.gen_model.T
+            params['batch_size'] = self.gen_model.ntrials
 
         return params
 
@@ -520,8 +520,9 @@ class RecognitionModel(Module):
         # dataset = Dataset(self.gen_model.Y)
 
         # So that the last dimension is the batch dimension
-        transposed_Y = self.gen_model.Y.transpose(0, -1) # (T, N, ntrials)
-        dataloader = DataLoader(transposed_Y, batch_size=train_params_recognition['batch_size'])
+        # transposed_Y = self.gen_model.Y.transpose(0, -1) # (T, N, ntrials)
+        # dataloader = DataLoader(transposed_Y, batch_size=train_params_recognition['batch_size'])
+        dataloader = DataLoader(self.gen_model.Y, batch_size=train_params_recognition['batch_size'])
 
         self.fit(dataloader, train_params_recognition)
     
@@ -530,8 +531,8 @@ class RecognitionModel(Module):
         x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
         return x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
     
-    def sample_matheron_pert(self, n_mc: int):
-        z_prior = self.gen_model.sample_z(n_mc).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
+    def sample_matheron_pert(self, n_mc: int, trials):
+        z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
         pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
         noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
@@ -605,17 +606,19 @@ class RecognitionModel(Module):
             for batch_mc_z in mc_batches:
                 mc_weight = batch_mc_z / n_mc_z # fraction of the total samples
                 for y in data: # loop over batches TODO
+                    batch_trials = y.shape[0]
+                    batch_weight = batch_trials / self.gen_model.ntrials
                     # NN pseudo observations
-                    y = y.transpose(-1, 0) # (ntrials, N, batch_size)
+                    # y = y.transpose(-1, 0) # (ntrials, N, batch_size)
                     x_tilde = self.get_x_tilde(y) # (ntrials, x_dim, batch_size)
 
                     # Matheron psuedo observations
-                    matheron_pert = self.sample_matheron_pert(batch_mc_z) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
+                    matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol).sum()
 
                     if accumulate_gradient:
-                        loss = loss * mc_weight
+                        loss = loss * mc_weight * batch_weight
                     loss_vals.append(loss.item())
 
                     loss.backward()

@@ -254,33 +254,33 @@ class LDS(GenerativeModel):
             # A = torch.rand(1, self.b, self.b).to(device)
             A = torch.eye(self.b)[None, ...].to(device)
         if C is None:
-            # C = torch.randn(1, self.N, self.x_dim).to(device) / np.sqrt(self.x_dim)
+            C = torch.randn(1, self.N, self.x_dim).to(device) / np.sqrt(self.x_dim)
 
-            # Create an identity matrix of size x_dim
-            identity = torch.eye(self.x_dim).to(device)
+            # # Create an identity matrix of size x_dim
+            # identity = torch.eye(self.x_dim).to(device)
 
-            # Repeat the identity matrix N//x_dim times
-            C = identity.repeat(self.N//self.x_dim, 1)
+            # # Repeat the identity matrix N//x_dim times
+            # C = identity.repeat(self.N//self.x_dim, 1)
 
-            # If N is not a multiple of x_dim, append the remaining rows with zeros
-            if self.N % self.x_dim != 0:
-                zeros = torch.zeros((self.N % self.x_dim, self.x_dim)).to(device)
-                C = torch.cat((C, zeros))
+            # # If N is not a multiple of x_dim, append the remaining rows with zeros
+            # if self.N % self.x_dim != 0:
+            #     zeros = torch.zeros((self.N % self.x_dim, self.x_dim)).to(device)
+            #     C = torch.cat((C, zeros))
 
-            # Reshape C to have shape (1, N, x_dim)
-            C = C.unsqueeze(0)
+            # # Reshape C to have shape (1, N, x_dim)
+            # C = C.unsqueeze(0)
 
         if W is None:
-            # W = torch.randn(1, self.x_dim, self.b).to(device) / np.sqrt(self.b)
+            W = torch.randn(1, self.x_dim, self.b).to(device) / np.sqrt(self.b)
 
-            # Create an identity matrix of size x_dim
-            identity = torch.eye(self.x_dim).to(device)
+            # # Create an identity matrix of size x_dim
+            # identity = torch.eye(self.x_dim).to(device)
 
-            # Slice the identity matrix to get the first b columns
-            W = identity[:, :self.b]
+            # # Slice the identity matrix to get the first b columns
+            # W = identity[:, :self.b]
 
-            # Reshape W to have shape (1, x_dim, b)
-            W = W.unsqueeze(0)
+            # # Reshape W to have shape (1, x_dim, b)
+            # W = W.unsqueeze(0)
         if B is None:
             # B = torch.rand(1, self.b, self.b).to(device)
             B = torch.eye(self.b)[None, ...].to(device)

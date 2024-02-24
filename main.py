@@ -9,7 +9,7 @@ import torch.distributions as dists
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.nn import Module
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, LambdaLR
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -165,7 +165,9 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             'lrate': 5E-2,
             'n_mc': 32,
             'accumulate_gradient': True,
-            'batch_mc': None
+            'batch_mc': None,
+            'burnin': 100,
+            'StepLR': True,
         }
 
         for key, value in kwargs.items():
@@ -186,13 +188,20 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
         self.fit(dataloader, train_params)
 
     def fit(self, data: DataLoader, train_params):
+        # set learning rate schedule so sigma updates have a burn-in period
+        burnin = train_params['burnin']
+        def fburn(x):
+            return 1 - np.exp(-x / (3 * burnin))
         lrate = train_params['lrate']
         n_mc = train_params['n_mc']
         max_steps = train_params['max_steps']
 
         optimizer = train_params['optimizer']
         optimizer = optimizer(self.prms, lr=lrate)
-        scheduler = StepLR(optimizer, step_size=train_params['step_size'], gamma=train_params['gamma']) # TODO: understand these parameters
+        if train_params['StepLR']:
+            scheduler = StepLR(optimizer, step_size=train_params['step_size'], gamma=train_params['gamma']) # TODO: understand these parameters
+        else:
+            scheduler = LambdaLR(optimizer, lr_lambda=[fburn])
 
         self.LLs = []
         for i in range(max_steps):
@@ -213,7 +222,8 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
     
     @property
     def prms(self):
-        return chain(self.parameters(), self.lik.parameters())
+        # return chain(self.parameters(), self.lik.parameters())
+        return self.parameters()
     
     def freeze_params(self):
         for param in self.prms:
@@ -229,7 +239,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 class LDS(GenerativeModel):
     def __init__(self, z: Tensor, Y: Tensor, lik, x_dim=None, link_fn=torch.exp,
                  A=None, C=None, W=None, B=None, mu0=None, Sigma0_half=None, sigma_x=None,
-                 trained_z=False, d=0., fixed_d=True) -> None:
+                 trained_z=False, d=0., fixed_d=True, single_sigma_x=False) -> None:
         super().__init__(z, Y, lik)
 
         self.link_fn = link_fn
@@ -244,7 +254,8 @@ class LDS(GenerativeModel):
             # A = torch.rand(1, self.b, self.b).to(device)
             A = torch.eye(self.b)[None, ...].to(device)
         if C is None:
-            # C = torch.rand(1, self.N, self.x_dim).to(device)
+            # C = torch.randn(1, self.N, self.x_dim).to(device) / np.sqrt(self.x_dim)
+
             # Create an identity matrix of size x_dim
             identity = torch.eye(self.x_dim).to(device)
 
@@ -260,7 +271,8 @@ class LDS(GenerativeModel):
             C = C.unsqueeze(0)
 
         if W is None:
-            # W = torch.rand(1, self.x_dim, self.b).to(device)
+            # W = torch.randn(1, self.x_dim, self.b).to(device) / np.sqrt(self.b)
+
             # Create an identity matrix of size x_dim
             identity = torch.eye(self.x_dim).to(device)
 
@@ -279,7 +291,8 @@ class LDS(GenerativeModel):
             Sigma0_half = 0.1 * torch.eye(self.b)[None, ...].to(device)
         if sigma_x is None:
             # sigma_x = torch.abs(torch.randn(1).to(device))
-            sigma_x = torch.tensor(0.1).to(device)
+            # sigma_x = torch.tensor(0.1).to(device)
+            sigma_x = 0.1 * torch.ones(self.x_dim).to(device)
 
         self.A = torch.nn.Parameter(A, requires_grad= not trained_z)
         self.C = torch.nn.Parameter(C)
@@ -290,11 +303,16 @@ class LDS(GenerativeModel):
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
         self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
 
+        self.single_sigma_x = single_sigma_x
+
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
     
     @property
     def sigma_x(self):
-        return torch.exp(self.log_sigma_x)
+        if self.single_sigma_x:
+            return torch.ones(self.x_dim).to(device) * torch.exp(self.log_sigma_x[0])
+        else:
+            return torch.exp(self.log_sigma_x)
 
     @property
     def var_x(self):
@@ -314,7 +332,8 @@ class LDS(GenerativeModel):
     
     @property
     def R(self):
-        R =  self.var_x * torch.eye(self.x_dim).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        # R =  self.var_x * torch.eye(self.x_dim).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        R = torch.diag(self.var_x).unsqueeze(0).to(device) # (1, x_dim, x_dim)
         jitter = torch.eye(R.shape[-1]).to(R.device) * 1e-6
         return R + jitter
     
@@ -339,7 +358,8 @@ class LDS(GenerativeModel):
         # Calculate first term of LL (p(y_{1:T}|z_{1:T}))
         mu = W @ z # (n_mc_z, ntrials, x_dim, T)
         samples = torch.randn(n_mc, n_mc_z, ntrials, self.x_dim, T).to(device)
-        samples = self.sigma_x * samples + mu[None, ...]
+        # samples = self.sigma_x * samples + mu[None, ...]
+        samples = torch.diag(self.sigma_x) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
         # print(samples.shape)
         firing_rates = self.link_fn(C[None, ...] @ samples + self.d) # (n_mc_z, n_mc, ntrials, N, T)
         first = self.lik.LL(firing_rates, Y) # (ntrials,)

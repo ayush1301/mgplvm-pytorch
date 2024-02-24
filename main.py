@@ -14,7 +14,10 @@ from torch.optim.lr_scheduler import StepLR, LambdaLR
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def make_symmetric(m: Tensor):
-    return (m + m.T)/2
+    new = (m + m.T)/2
+    if not torch.allclose(new, m):
+        raise ValueError('Matrix is not symmetric')
+    return new
 
 def is_symmetric(matrix):
     return torch.all(matrix == matrix.T)
@@ -290,8 +293,6 @@ class LDS(GenerativeModel):
         if Sigma0_half is None:
             Sigma0_half = 0.1 * torch.eye(self.b)[None, ...].to(device)
         if sigma_x is None:
-            # sigma_x = torch.abs(torch.randn(1).to(device))
-            # sigma_x = torch.tensor(0.1).to(device)
             sigma_x = 0.1 * torch.ones(self.x_dim).to(device)
 
         self.A = torch.nn.Parameter(A, requires_grad= not trained_z)
@@ -704,25 +705,33 @@ class Preprocessor(Module):
         self.v_dim = v.shape[1]
         self.z_dim = z_dim # dimension of the latent space
 
-        self.A = torch.nn.Parameter(torch.rand(self.z_dim, self.z_dim).to(device))
+        self.A = torch.nn.Parameter(torch.randn(self.z_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         self.B = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
-        self.W = torch.nn.Parameter(torch.rand(self.v_dim, self.z_dim).to(device))
-        self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
+        self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
+        # self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
+        self.mu0 = torch.nn.Parameter(torch.zeros(self.z_dim).to(device))
         self.Sigma0_half = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
-        self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
+        # self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
+        self.R_half = torch.nn.Parameter(0.1 * torch.eye(self.v_dim).to(device))
 
-    @property
-    def sigma_v(self):
-        return torch.exp(self.log_sigma_v)
+    # @property
+    # def sigma_v(self):
+    #     return torch.exp(self.log_sigma_v)
     
-    @property
-    def var_v(self):
-        return torch.square(self.sigma_v)
+    # @property
+    # def var_v(self):
+    #     return torch.square(self.sigma_v)
+    
+    # @property
+    # def R(self):
+    #     jitter = torch.eye(self.v_dim).to(self.sigma_v.device) * 1e-6
+    #     return self.var_v * torch.eye(self.v_dim).to(device) + jitter
     
     @property
     def R(self):
-        jitter = torch.eye(self.v_dim).to(self.sigma_v.device) * 1e-6
-        return self.var_v * torch.eye(self.v_dim).to(device) + jitter
+        # self.R_half.data = torch.tril(self.R_half.data)
+        jitter = torch.eye(self.v_dim).to(self.R_half.device) * 1e-6
+        return self.R_half @ self.R_half.T + jitter
     
     @property
     def Q(self):
@@ -794,10 +803,10 @@ class Preprocessor(Module):
                 v = v_transposed.transpose(-1, 0) # (ntrials, v_dim, batch_size)
                 Sigmas_diffused, Ks = self.kalman_covariance() # (T-1, z_dim, z_dim), (T, z_dim, v_dim)
                 mus_diffused = self.kalman_means(v, Ks) # (T, ntrials, z_dim)
-                loss = -self.LL(v, mus_diffused, Sigmas_diffused).mean()
+                loss = -self.LL(v, mus_diffused, Sigmas_diffused).sum()
                 loss.backward()
                 optimizer.step()
-                self.LLs.append(-loss.item())
+                self.LLs.append(-loss.item()/(self.v_dim * self.T * self.v.shape[0]))
             scheduler.step()
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])

@@ -242,7 +242,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 class LDS(GenerativeModel):
     def __init__(self, z: Tensor, Y: Tensor, lik, x_dim=None, link_fn=torch.exp,
                  A=None, C=None, W=None, B=None, mu0=None, Sigma0_half=None, sigma_x=None,
-                 trained_z=False, d=0., fixed_d=True, single_sigma_x=False) -> None:
+                 trained_z=False, d=0., fixed_d=True, single_sigma_x=False, full_R=False) -> None:
         super().__init__(z, Y, lik)
 
         self.link_fn = link_fn
@@ -299,12 +299,17 @@ class LDS(GenerativeModel):
         self.C = torch.nn.Parameter(C)
         self.W = torch.nn.Parameter(W)
         self.B = torch.nn.Parameter(B, requires_grad= not trained_z)
-        self.log_sigma_x = torch.nn.Parameter(torch.log(sigma_x))
+        if full_R:
+            R_half = 0.1 * torch.eye(self.x_dim).to(device)
+            self.R_half = torch.nn.Parameter(R_half)
+        else:
+            self.log_sigma_x = torch.nn.Parameter(torch.log(sigma_x))
         self.mu0 = torch.nn.Parameter(mu0, requires_grad= not trained_z)
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
         self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
 
         self.single_sigma_x = single_sigma_x
+        self.full_R = full_R
 
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
     
@@ -334,7 +339,10 @@ class LDS(GenerativeModel):
     @property
     def R(self):
         # R =  self.var_x * torch.eye(self.x_dim).unsqueeze(0).to(device) # (1, x_dim, x_dim)
-        R = torch.diag(self.var_x).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        if self.full_R:
+            R = (self.R_half @ self.R_half.T).unsqueeze(0).to(device) # (1, x_dim, x_dim)
+        else:
+            R = torch.diag(self.var_x).unsqueeze(0).to(device) # (1, x_dim, x_dim) 
         jitter = torch.eye(R.shape[-1]).to(R.device) * 1e-6
         return R + jitter
     
@@ -359,8 +367,11 @@ class LDS(GenerativeModel):
         # Calculate first term of LL (p(y_{1:T}|z_{1:T}))
         mu = W @ z # (n_mc_z, ntrials, x_dim, T)
         samples = torch.randn(n_mc, n_mc_z, ntrials, self.x_dim, T).to(device)
+
         # samples = self.sigma_x * samples + mu[None, ...]
-        samples = torch.diag(self.sigma_x) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
+        # samples = torch.diag(self.sigma_x) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
+        samples = torch.linalg.cholesky(self.R).squeeze(0) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
+
         # print(samples.shape)
         firing_rates = self.link_fn(C[None, ...] @ samples + self.d) # (n_mc_z, n_mc, ntrials, N, T)
         first = self.lik.LL(firing_rates, Y) # (ntrials,)
@@ -617,10 +628,14 @@ class RecognitionModel(Module):
         assert np.sum(mc_batches) == n_mc_z
 
         self.LLs = []
+        self.entropy_vals = []
+        self.joint_LL_vals = []
         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
         for i in range(max_steps):
             loss_vals = []
+            entropy_vals = []
+            joint_LL_vals = []
             prev_mu = None
             prev_Sigma = None
             prev_z = None
@@ -636,11 +651,16 @@ class RecognitionModel(Module):
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
-                    loss = -self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol).sum()
+                    loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol)
+                    loss *= -1 # negative LL
 
                     if accumulate_gradient:
                         loss = loss * mc_weight * batch_weight
+                        entropy = entropy * mc_weight * batch_weight
+                        joint = joint * mc_weight * batch_weight
                     loss_vals.append(loss.item())
+                    entropy_vals.append(entropy.item())
+                    joint_LL_vals.append(joint.item())
 
                     loss.backward()
 
@@ -659,8 +679,10 @@ class RecognitionModel(Module):
             scheduler.step()
             Z = self.gen_model.T * self.gen_model.ntrials * self.gen_model.N
             self.LLs.append(-np.sum(loss_vals)/(Z))
+            self.entropy_vals.append(np.sum(entropy_vals)/(Z))
+            self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
-                print('step', i, 'LL', self.LLs[-1])
+                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1])
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
         # y is (ntrials, N, batch_size)
@@ -670,7 +692,7 @@ class RecognitionModel(Module):
         mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
         joint_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None) # (ntrials,) # TODO: batching
-        return entropy + joint_LL
+        return (entropy + joint_LL).sum(), entropy.sum(), joint_LL.sum()
     
     def freeze_params(self):
         for param in self.neural_net.parameters():

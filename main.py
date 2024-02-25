@@ -15,7 +15,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def make_symmetric(m: Tensor):
     new = (m + m.T)/2
-    if not torch.allclose(new, m):
+    if not torch.allclose(new, m, atol=1e-6):
+        print(torch.max(torch.abs(new - m)))
         raise ValueError('Matrix is not symmetric')
     return new
 
@@ -307,6 +308,7 @@ class LDS(GenerativeModel):
         self.mu0 = torch.nn.Parameter(mu0, requires_grad= not trained_z)
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
         self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
+        # self.d = torch.nn.Parameter(d * torch.ones(self.N).to(device), requires_grad=not fixed_d)
 
         self.single_sigma_x = single_sigma_x
         self.full_R = full_R
@@ -370,7 +372,7 @@ class LDS(GenerativeModel):
 
         # samples = self.sigma_x * samples + mu[None, ...]
         # samples = torch.diag(self.sigma_x) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
-        samples = torch.linalg.cholesky(self.R).squeeze(0) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
+        samples = torch.linalg.cholesky(self.R.squeeze(0)) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
 
         # print(samples.shape)
         firing_rates = self.link_fn(C[None, ...] @ samples + self.d) # (n_mc_z, n_mc, ntrials, N, T)
@@ -489,6 +491,35 @@ class Gaussian_noise(Noise):
         dist = Normal(rates, self.sigma)
         return self.general_LL(dist, y)
 
+class MultiHeadNetwork(Module):
+    def __init__(self, input_size, shared_layer_sizes, head_layer_sizes, head_names):
+        super(MultiHeadNetwork, self).__init__()
+
+        # Define shared layers
+        self.shared_layers = self._make_layers(input_size, shared_layer_sizes, final_relu=True)
+        self.head_names = head_names
+
+        # Define separate heads
+        self.heads = torch.nn.ModuleList([
+            self._make_layers(shared_layer_sizes[-1], layers, final_relu=False)
+            for layers in head_layer_sizes
+        ])
+
+    def _make_layers(self, input_size, layer_sizes, final_relu):
+        layers = []
+        for i, layer_size in enumerate(layer_sizes):
+            layers.append(torch.nn.Linear(input_size, layer_size))
+            if i != len(layer_sizes) - 1 or final_relu:
+                layers.append(torch.nn.ReLU())
+            input_size = layer_size
+        return torch.nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.shared_layers(x)
+        ret= {}
+        for i, head in enumerate(self.heads):
+            ret[self.head_names[i]] = head(x)
+    
 class RNNModel(Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(RNNModel, self).__init__()
@@ -501,13 +532,20 @@ class RNNModel(Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
         if neural_net is None:
             if rnn:
                 self.neural_net = RNNModel(gen_model.N, hidden_layer_size, gen_model.x_dim).to(device)
+            elif cov_change:
+                self.neural_net = MultiHeadNetwork(
+                    input_size=gen_model.N,
+                    shared_layer_sizes=[100,],
+                    head_names=['x_tilde', 'R'],
+                    head_layer_sizes=[[gen_model.x_dim,], [gen_model.x_dim,]]
+                )
             else:
                 self.neural_net = torch.nn.Sequential(
                     torch.nn.Linear(gen_model.N, hidden_layer_size),
@@ -516,6 +554,7 @@ class RecognitionModel(Module):
                 ).to(device)
         else:
             self.neural_net = neural_net.to(device)
+        self.cov_change = cov_change
     
     def training_params(self, **kwargs): # code from mgp
         params = {
@@ -560,8 +599,13 @@ class RecognitionModel(Module):
     
     def get_x_tilde(self, y: Tensor):
         # y is (ntrials, N, batch_size)
-        x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
-        return x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
+        if not self.cov_change:
+            x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
+            return x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
+        else:
+            tilde = self.neural_net(y.transpose(-1, -2))
+            for key, value in tilde.items():
+                pass
     
     def sample_matheron_pert(self, n_mc: int, trials):
         z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?

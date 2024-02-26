@@ -307,8 +307,8 @@ class LDS(GenerativeModel):
             self.log_sigma_x = torch.nn.Parameter(torch.log(sigma_x))
         self.mu0 = torch.nn.Parameter(mu0, requires_grad= not trained_z)
         self.Sigma0_half = torch.nn.Parameter(Sigma0_half, requires_grad= not trained_z)
-        self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
-        # self.d = torch.nn.Parameter(d * torch.ones(self.N).to(device), requires_grad=not fixed_d)
+        # self.d = torch.nn.Parameter(torch.tensor(d).to(device), requires_grad=not fixed_d)
+        self.d = torch.nn.Parameter(d * torch.ones(self.N).to(device), requires_grad=not fixed_d)
 
         self.single_sigma_x = single_sigma_x
         self.full_R = full_R
@@ -375,7 +375,7 @@ class LDS(GenerativeModel):
         samples = torch.linalg.cholesky(self.R.squeeze(0)) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
 
         # print(samples.shape)
-        firing_rates = self.link_fn(C[None, ...] @ samples + self.d) # (n_mc_z, n_mc, ntrials, N, T)
+        firing_rates = self.link_fn(C[None, ...] @ samples + self.d[:, None]) # (n_mc_z, n_mc, ntrials, N, T)
         first = self.lik.LL(firing_rates, Y) # (ntrials,)
         # print(first.shape)
 

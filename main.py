@@ -532,7 +532,7 @@ class RNNModel(Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -555,6 +555,7 @@ class RecognitionModel(Module):
         else:
             self.neural_net = neural_net.to(device)
         self.cov_change = cov_change
+        self.zero_mean_x_tilde = zero_mean_x_tilde
     
     def training_params(self, **kwargs): # code from mgp
         params = {
@@ -601,7 +602,10 @@ class RecognitionModel(Module):
         # y is (ntrials, N, batch_size)
         if not self.cov_change:
             x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
-            return x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
+            x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
+            if self.zero_mean_x_tilde:
+                x_tilde = x_tilde - x_tilde.mean(dim=-1, keepdim=True)
+            return x_tilde
         else:
             tilde = self.neural_net(y.transpose(-1, -2))
             for key, value in tilde.items():

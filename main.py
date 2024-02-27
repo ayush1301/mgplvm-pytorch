@@ -27,8 +27,10 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     # Kalman filter
     Sigmas_filt = [] # Sigmas_filt[t] = Sigma_t^t 
     Sigmas_diffused = [] # Sigmas_diffused[t] = Sigma_{t+1}^t
-    Sigmas_diffused_chol = torch.zeros(T - 1, b, b).to(device) # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t]
-    Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
+    # Sigmas_diffused_chol = torch.zeros(T - 1, b, b).to(device) # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t]
+    Sigmas_diffused_chol = [] # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t], shape = T - 1, b, b at end
+    # Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
+    Sigmas_tilde = [torch.zeros(b, b).to(device) for _ in range(T)] # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
     Ks = [] # Ks[t] = K_t
 
     # print if Q, R, Sigma0 are not symmetric
@@ -46,7 +48,8 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
         # populate Sigmas_diffused[t-1] and Sigmas_filt[t]
         jitter = 1e-6 * torch.eye(b).to(device)
         Sigmas_diffused.append(make_symmetric(A @ Sigmas_filt[t-1] @ A.T + Q))
-        Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter) # (b, b)
+        # Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter) # (b, b)
+        Sigmas_diffused_chol.append(torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter))
 
         # K = Sigmas_diffused[t-1] @ W.T @ torch.linalg.inv(R + W @ Sigmas_diffused[t-1] @ W.T) # (b, x_dim)
         jitter = 1e-6 * torch.eye(x_dim).to(device)
@@ -58,7 +61,8 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     # Kalman smoother
     if smoothing:
         Sigmas_tilde[-1] = Sigmas_filt[-1] # (b, b)
-        Cs = torch.zeros(T- 1, b, b).to(device) # Cs[t] = C_t
+        # Cs = torch.zeros(T- 1, b, b).to(device) # Cs[t] = C_t
+        Cs = [torch.zeros(b, b).to(device) for _ in range(T - 1)] # Cs[t] = C_t
         for t in range(T - 2, -1, -1):
             # Cs[t] = Sigmas_filt[t] @ A.T @ torch.linalg.inv(Sigmas_diffused[t]) # (b, b)
             S = Sigmas_diffused_chol[t] # (b, b)
@@ -66,14 +70,15 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             Sigmas_tilde[t] = make_symmetric(Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T)
             # # print min eigenvalue of Sigmas_tilde[t]
             # print(torch.linalg.eigvals(Sigmas_tilde[t]))
-        Sigmas_tilde_chol = torch.linalg.cholesky(Sigmas_tilde + 1e-4 * torch.eye(b).to(device)) # (b, b)
+        Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
 
         if get_sigma_tilde:
-            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde_chol
+            # return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde_chol
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs), Sigmas_tilde_chol
         else:
-            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
     else:
         return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks) # (T, b, b), (T-1, b, b), (T, b, x_dim)
     
@@ -556,6 +561,8 @@ class RecognitionModel(Module):
             self.neural_net = neural_net.to(device)
         self.cov_change = cov_change
         self.zero_mean_x_tilde = zero_mean_x_tilde
+        self.gamma = Tensor([1.]).to(device)
+        self.delta_R = torch.zeros(gen_model.x_dim).to(device)
     
     def training_params(self, **kwargs): # code from mgp
         params = {
@@ -582,6 +589,25 @@ class RecognitionModel(Module):
             params['batch_size'] = self.gen_model.ntrials
 
         return params
+    
+    @property
+    def gen_model_matrices(self):
+        if not self.cov_change:
+            return self.gen_model.R
+        else:
+            # return self.gen_model.R * self.gamma
+
+            # Get the diagonal and off-diagonal elements
+            diag = torch.diag(self.gen_model.R + torch.diag(self.delta_R))
+            off_diag = self.gen_model.R + torch.diag(self.delta_R) - torch.diag(diag)
+
+            # Clamp the diagonal elements
+            diag = diag.clamp_min(1e-6)
+
+            # Add the clamped diagonal elements back to the off-diagonal elements
+            R = off_diag + torch.diag(diag)
+
+            return R
 
     def train_full_model(self, train_params_gen, train_params_recognition):
         self.gen_model.train_supervised_model(train_params_gen)
@@ -602,19 +628,29 @@ class RecognitionModel(Module):
         # y is (ntrials, N, batch_size)
         if not self.cov_change:
             x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
-            x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
-            if self.zero_mean_x_tilde:
-                x_tilde = x_tilde - x_tilde.mean(dim=-1, keepdim=True)
-            return x_tilde
         else:
-            tilde = self.neural_net(y.transpose(-1, -2))
-            for key, value in tilde.items():
-                pass
+            tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim+1)
+            # Assume for now that the first x_dim elements are for x_tilde and the next element is for R
+            x_tilde = tilde[..., :self.gen_model.x_dim] # (ntrials, batch_size, x_dim)
+
+            # gamma = 2 * torch.sigmoid(torch.mean(tilde[..., -1])) # (1, )
+            # self.gamma = gamma
+
+            delta_R = torch.mean(tilde[..., self.gen_model.x_dim:], dim=(0,1)) # (x_dim, )
+            assert len(delta_R) == self.gen_model.x_dim
+            self.delta_R = delta_R 
+
+
+        x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
+        if self.zero_mean_x_tilde:
+            x_tilde = x_tilde - x_tilde.mean(dim=-1, keepdim=True)
+        return x_tilde
     
     def sample_matheron_pert(self, n_mc: int, trials):
         z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
         pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
-        noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
+        # noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
+        noise = torch.linalg.cholesky(self.gen_model_matrices) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
     
     def kalman_covariance(self, T=None, get_sigma_tilde=False): # return all matrices independent of observations
@@ -623,7 +659,8 @@ class RecognitionModel(Module):
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model.W.squeeze(0) # (x_dim, b)
         Q = self.gen_model.Q.squeeze(0) # (b, b)
-        R = self.gen_model.R.squeeze(0)
+        # R = self.gen_model.R.squeeze(0)
+        R = self.gen_model_matrices.squeeze(0)
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
         x_dim = self.gen_model.x_dim
@@ -699,6 +736,8 @@ class RecognitionModel(Module):
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
+                    if self.cov_change:
+                        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
                     loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol)
                     loss *= -1 # negative LL
 
@@ -730,7 +769,7 @@ class RecognitionModel(Module):
             self.entropy_vals.append(np.sum(entropy_vals)/(Z))
             self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
-                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1])
+                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1], 'Gamma', self.gamma.item())
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
         # y is (ntrials, N, batch_size)

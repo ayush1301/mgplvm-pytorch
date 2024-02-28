@@ -598,8 +598,8 @@ class RecognitionModel(Module):
             # return self.gen_model.R * self.gamma
 
             # Get the diagonal and off-diagonal elements
-            diag = torch.diag(self.gen_model.R + torch.diag(self.delta_R))
-            off_diag = self.gen_model.R + torch.diag(self.delta_R) - torch.diag(diag)
+            diag = torch.diag(self.gen_model.R.squeeze(0) + torch.diag(self.delta_R))
+            off_diag = self.gen_model.R.squeeze(0) + torch.diag(self.delta_R) - torch.diag(diag)
 
             # Clamp the diagonal elements
             diag = diag.clamp_min(1e-6)
@@ -607,7 +607,7 @@ class RecognitionModel(Module):
             # Add the clamped diagonal elements back to the off-diagonal elements
             R = off_diag + torch.diag(diag)
 
-            return R
+            return R[None, ...]
 
     def train_full_model(self, train_params_gen, train_params_recognition):
         self.gen_model.train_supervised_model(train_params_gen)
@@ -769,7 +769,7 @@ class RecognitionModel(Module):
             self.entropy_vals.append(np.sum(entropy_vals)/(Z))
             self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
-                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1], 'Gamma', self.gamma.item())
+                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1], 'Gamma', self.gamma.item(), 'dR_max', torch.max(self.delta_R).item(), 'dR_min', torch.min(self.delta_R).item())
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
         # y is (ntrials, N, batch_size)

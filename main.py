@@ -954,3 +954,13 @@ class Preprocessor(Module):
     def freeze_params(self):
         for param in self.parameters():
             param.requires_grad = False
+
+    def sample_v(self, trials, T):
+        z_0 = self.mu0[None, ...] + (torch.linalg.cholesky(self.Sigma0) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
+        z_s = torch.zeros(trials, self.z_dim, T).to(device)
+        z_s[..., 0] = z_0
+        samples = torch.zeros(trials, self.v_dim, T).to(device)
+        for t in range(1, T):
+            z_s[..., t] = (self.A @ z_s[..., t-1][..., None] + torch.linalg.cholesky(self.Q) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
+            samples[..., t] = (self.W @ z_s[..., t][..., None] + torch.linalg.cholesky(self.R) @ torch.randn(trials, self.v_dim, 1).to(device)).squeeze(-1)
+        return samples

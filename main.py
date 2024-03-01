@@ -643,7 +643,7 @@ class RecognitionModel(Module):
 
         x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
         if self.zero_mean_x_tilde:
-            x_tilde = x_tilde - x_tilde.mean(dim=-1, keepdim=True)
+            x_tilde = x_tilde - x_tilde.mean(dim=(0,2), keepdim=True)
         return x_tilde
     
     def sample_matheron_pert(self, n_mc: int, trials):

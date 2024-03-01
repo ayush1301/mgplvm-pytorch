@@ -957,7 +957,7 @@ class Preprocessor(Module):
 
     def sample_v(self, trials, T):
         z_0 = self.mu0[None, ...] + (torch.linalg.cholesky(self.Sigma0) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
-        z_s = torch.zeros(trials, self.z_dim, T).to(device)
+        z_s = torch.zeros(trials, self.z_dim, T, dtype=self.mu0.dtype).to(device)
         z_s[..., 0] = z_0
         samples = torch.zeros(trials, self.v_dim, T).to(device)
         for t in range(1, T):

@@ -14,23 +14,38 @@ from torch.optim.lr_scheduler import StepLR, LambdaLR
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def make_symmetric(m: Tensor):
-    new = (m + m.T)/2
+    new = (m + m.transpose(-1,-2))/2
     if not torch.allclose(new, m, atol=1e-6):
         print(torch.max(torch.abs(new - m)))
         raise ValueError('Matrix is not symmetric')
     return new
 
 def is_symmetric(matrix):
-    return torch.all(matrix == matrix.T)
+    return torch.all(matrix == matrix.transpose(-1, -2))
 
 def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True): # return all matrices independent of observations
+    W_var, R_var, Q_var, A_var = True, True, True, True
+    if len(W.shape) == 2:
+        W = W[None, None, ...] # T, ntrials, x_dim, b
+        W_var = False
+    if len(R.shape) == 2:
+        R = R[None, None, ...] # T, ntrials, x_dim, x_dim
+        R_var = False
+    if len(A.shape) == 2:
+        A = A[None, None, ...] # T-1, ntrials, b, b
+        A_var = False
+    if len(Q.shape) == 2:
+        Q = Q[None, None, ...] # T-1, ntrials, b, b
+        Q_var = False
+    if len(Sigma0.shape) == 2:
+        Sigma0 = Sigma0[None, ...] # ntrials, b, b
+    trials = max(A.shape[1], W.shape[1], Q.shape[1], R.shape[1], Sigma0.shape[0])
+
     # Kalman filter
     Sigmas_filt = [] # Sigmas_filt[t] = Sigma_t^t 
     Sigmas_diffused = [] # Sigmas_diffused[t] = Sigma_{t+1}^t
-    # Sigmas_diffused_chol = torch.zeros(T - 1, b, b).to(device) # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t]
     Sigmas_diffused_chol = [] # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t], shape = T - 1, b, b at end
-    # Sigmas_tilde = torch.zeros(T, b, b).to(device) # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
-    Sigmas_tilde = [torch.zeros(b, b).to(device) for _ in range(T)] # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
+    Sigmas_tilde = [torch.zeros(trials, b, b).to(device) for _ in range(T)] # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
     Ks = [] # Ks[t] = K_t
 
     # print if Q, R, Sigma0 are not symmetric
@@ -38,44 +53,47 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
         print('assymetry in cov!!')
 
     # Sub in the first time step
-    S = torch.linalg.cholesky(R + W @ Sigma0 @ W.T) # (x_dim, x_dim)
-    K = chol_inv(S, Sigma0 @ W.T, left=False) # (b, x_dim)
-    Sigmas_filt.append(make_symmetric(Sigma0 - K @ W @ Sigma0)) # (b, b)
+    S = torch.linalg.cholesky(R[0] + W[0] @ Sigma0 @ W[0].transpose(-1, -2)) # (ntrials, x_dim, x_dim)
+    K = chol_inv(S, Sigma0 @ W[0].transpose(-1, -2), left=False) # (ntrials, b, x_dim)
+    Sigmas_filt.append(make_symmetric(Sigma0 - K @ W[0] @ Sigma0)) # (ntrials, b, b)
     Ks.append(K)
 
     # Remaining time steps
     for t in range(1, T):
+        # Find matrices relevant for this time step
+        _A = A[t-1] if A_var else A[0]
+        _W = W[t] if W_var else W[0]
+        _Q = Q[t-1] if Q_var else Q[0]
+        _R = R[t] if R_var else R[0]
+    
         # populate Sigmas_diffused[t-1] and Sigmas_filt[t]
         jitter = 1e-6 * torch.eye(b).to(device)
-        Sigmas_diffused.append(make_symmetric(A @ Sigmas_filt[t-1] @ A.T + Q))
-        # Sigmas_diffused_chol[t-1] = torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter) # (b, b)
+        Sigmas_diffused.append(make_symmetric(_A @ Sigmas_filt[t-1] @ _A.transpose(-1, -2) + _Q)) # (ntrials, b, b)
         Sigmas_diffused_chol.append(torch.linalg.cholesky(Sigmas_diffused[t-1] + jitter))
 
-        # K = Sigmas_diffused[t-1] @ W.T @ torch.linalg.inv(R + W @ Sigmas_diffused[t-1] @ W.T) # (b, x_dim)
         jitter = 1e-6 * torch.eye(x_dim).to(device)
-        S = torch.linalg.cholesky(R + W @ Sigmas_diffused[t-1] @ W.T + jitter) # (x_dim, x_dim)
-        K = chol_inv(S, Sigmas_diffused[t-1] @ W.T, left=False) # (b, x_dim)
-        Sigmas_filt.append(make_symmetric(Sigmas_diffused[t-1] - K @ W @ Sigmas_diffused[t-1])) # (b, b)
+        S = torch.linalg.cholesky(_R + _W @ Sigmas_diffused[t-1] @ _W.transpose(-1,-2) + jitter) # (ntrials, x_dim, x_dim)
+        K = chol_inv(S, Sigmas_diffused[t-1] @ _W.transpose(-1,-2), left=False) # (ntrials, b, x_dim)
+        Sigmas_filt.append(make_symmetric(Sigmas_diffused[t-1] - K @ _W @ Sigmas_diffused[t-1])) # (ntrials, b, b)
         Ks.append(K)
     
     # Kalman smoother
     if smoothing:
         Sigmas_tilde[-1] = Sigmas_filt[-1] # (b, b)
-        # Cs = torch.zeros(T- 1, b, b).to(device) # Cs[t] = C_t
-        Cs = [torch.zeros(b, b).to(device) for _ in range(T - 1)] # Cs[t] = C_t
+        Cs = [torch.zeros(trials, b, b).to(device) for _ in range(T - 1)] # Cs[t] = C_t
         for t in range(T - 2, -1, -1):
-            # Cs[t] = Sigmas_filt[t] @ A.T @ torch.linalg.inv(Sigmas_diffused[t]) # (b, b)
-            S = Sigmas_diffused_chol[t] # (b, b)
-            Cs[t] = chol_inv(S, Sigmas_filt[t] @ A.T, left=False) # (b, b)
-            Sigmas_tilde[t] = make_symmetric(Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].T)
-            # # print min eigenvalue of Sigmas_tilde[t]
-            # print(torch.linalg.eigvals(Sigmas_tilde[t]))
-        Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (b, b)
+            _A = A[t-1] if A_var else A[0]
+            _W = W[t] if W_var else W[0]
+            _Q = Q[t-1] if Q_var else Q[0]
+            _R = R[t] if R_var else R[0]
+            S = Sigmas_diffused_chol[t] # (ntrials, b, b)
+            Cs[t] = chol_inv(S, Sigmas_filt[t] @ _A.transpose(-1,-2), left=False) # (ntrials, b, b)
+            Sigmas_tilde[t] = make_symmetric(Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].transpose(-1,-2))
+        Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (ntrials, b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
 
         if get_sigma_tilde:
-            # return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), Cs, Sigmas_tilde_chol
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs), Sigmas_tilde_chol
         else:
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
@@ -83,7 +101,19 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
         return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks) # (T, b, b), (T-1, b, b), (T, b, x_dim)
     
 def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, smoothing=True):
-    # TODO: support batching
+    # Ks.shape = (T, ntrials, b, x_dim)
+    # Cs.shape = (T-1, ntrials, b, b)
+
+    W_var, A_var = True, True
+    if len(W.shape) == 2:
+        W = W[None, None, ...] # T, ntrials, x_dim, b
+        W_var = False
+    if len(A.shape) == 2:
+        A = A[None, None, ...] # T-1, ntrials, b, b
+        A_var = False
+    if len(mu0.shape) == 2:
+        mu0 = mu0[None, ...] # ntrials, b
+
     n_mc_z, n_trials, x_dim, batch_size = x_hat.shape
     _xhat = x_hat.permute(-1, 0, 1, 2) # (batch_size, n_mc_z, ntrials, x_dim)
 
@@ -92,14 +122,15 @@ def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, sm
     mus_diffused = [] # mu_diffused[t] = mu_{t+1}^t # (batch_size-1, n_mc_z, ntrials, b)
 
     # Sub in the first time step
-    mus_filt.append(mu0 + (Ks[0] @ (_xhat[0] - W @ mu0)[..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
+    mus_filt.append(mu0 + (Ks[0] @ ( _xhat[0][..., None] - W[0]@ mu0[..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
 
-    start_t = 1
-
-    for t in range(start_t, batch_size):
+    for t in range(1, batch_size):
+        # Find matrices relevant for this time step
+        _A = A[t-1] if A_var else A[0]
+        _W = W[t] if W_var else W[0]
         # populate mus_diffused[t-1] and mus_filt[t]
-        mus_diffused.append((A @ mus_filt[t-1][..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
-        mus_filt.append(mus_diffused[t-1] + (Ks[t] @ (_xhat[t][..., None] - W @ mus_diffused[t-1][..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
+        mus_diffused.append((_A @ mus_filt[t-1][..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
+        mus_filt.append(mus_diffused[t-1] + (Ks[t] @ (_xhat[t][..., None] - _W @ mus_diffused[t-1][..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
 
     # Kalman smoother
     if smoothing:
@@ -118,10 +149,10 @@ def chol_inv(u, x, left=True):
         # Solve U z = x
         u_inv_x = torch.linalg.solve_triangular(u, x, upper=False)
         # Solve U^T y = z
-        return torch.linalg.solve_triangular(u.T, u_inv_x, upper=True)
+        return torch.linalg.solve_triangular(u.transpose(-1,-2), u_inv_x, upper=True)
     else:
         # Solve z U^T = x
-        z_u_inv = torch.linalg.solve_triangular(u.T, x, upper=True, left=False)
+        z_u_inv = torch.linalg.solve_triangular(u.transpose(-1,-2), x, upper=True, left=False)
         # Solve y U = z
         return torch.linalg.solve_triangular(u, z_u_inv, upper=False, left=False)
 
@@ -678,16 +709,16 @@ class RecognitionModel(Module):
         # samples is (batch_size, n_mc_z, ntrials, b)
         # mus_filt is (batch_size, n_mc_z, ntrials, b)
         # mus_diffused is (batch_size-1, n_mc_z, ntrials, b)
-        # Cs is (batch_size-1, b, b)
-        # Sigmas_tilde_chol is (batch_size, b, b)
+        # Cs is (batch_size-1, ntrials, b, b) (ntrials can be 1 for const covariance)
+        # Sigmas_tilde_chol is (batch_size, ntrials, b, b) (ntrials can be 1 for const covariance)
 
         batch_size, n_mc_z, n_trials, b = samples.shape
         mus_tilde = torch.zeros(batch_size, n_mc_z, n_trials, b).to(device) # mu_tilde[t] = E[z_t|z_{t+1:T}, y_{1:T}]
         mus_tilde[-1] = mus_filt[-1] # (n_mc_z, ntrials, b)
         t_values = torch.arange(batch_size - 2, -1, -1)
-        mus_tilde[t_values] = mus_filt[t_values] + (Cs[:, None, None, ...][t_values] @ (samples[t_values + 1] - mus_diffused[t_values])[..., None]).squeeze(-1)
+        mus_tilde[t_values] = mus_filt[t_values] + (Cs[:, None, ...][t_values] @ (samples[t_values + 1] - mus_diffused[t_values])[..., None]).squeeze(-1)
         
-        dist = MultivariateNormal(mus_tilde, scale_tril=Sigmas_tilde_chol[:, None, None, ...])
+        dist = MultivariateNormal(mus_tilde, scale_tril=Sigmas_tilde_chol[:, None, ...])
         # dist = MultivariateNormal(mus_tilde, covariance_matrix=Sigmas_tilde[:, None, None, ...])
         log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
         return -log_prob.mean(dim=0) # (ntrials,)

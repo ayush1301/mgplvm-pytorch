@@ -291,8 +291,9 @@ class LDS(GenerativeModel):
 
         # Generative parameters
         if A is None:
-            # A = torch.rand(1, self.b, self.b).to(device)
-            A = torch.eye(self.b)[None, ...].to(device)
+            A = 0.8 * torch.randn(1, self.b, self.b).to(device) / np.sqrt(self.b)
+            # A = torch.eye(self.b)[None, ...].to(device)
+
         if C is None:
             C = torch.randn(1, self.N, self.x_dim).to(device) / np.sqrt(self.x_dim)
 
@@ -350,6 +351,10 @@ class LDS(GenerativeModel):
         self.full_R = full_R
 
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
+    
+    # @property
+    # def B(self):
+    #     return torch.tril(self._B)
     
     @property
     def sigma_x(self):
@@ -858,7 +863,7 @@ class Preprocessor(Module):
         self.v_dim = v.shape[1]
         self.z_dim = z_dim # dimension of the latent space
 
-        self.A = torch.nn.Parameter(torch.randn(self.z_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
+        self.A = torch.nn.Parameter(0.8* torch.randn(self.z_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         self.B = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
         self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         # self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))

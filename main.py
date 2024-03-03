@@ -592,8 +592,6 @@ class RecognitionModel(Module):
             self.neural_net = neural_net.to(device)
         self.cov_change = cov_change
         self.zero_mean_x_tilde = zero_mean_x_tilde
-        self.gamma = Tensor([1.]).to(device)
-        self.delta_R = torch.zeros(gen_model.x_dim).to(device)
     
     def training_params(self, **kwargs): # code from mgp
         params = {
@@ -621,24 +619,35 @@ class RecognitionModel(Module):
 
         return params
     
-    @property
-    def gen_model_matrices(self):
-        if not self.cov_change:
-            return self.gen_model.R
+    def gen_model_R(self, pseudo_obs):
+        if not self.cov_change or pseudo_obs is None or pseudo_obs['delta_R'] is None:
+            return self.gen_model.R.squeeze(0)
         else:
-            # return self.gen_model.R * self.gamma
+            if not self.gen_model.full_R:
+                # delta_R directly changes the diagonal elements of R
 
-            # Get the diagonal and off-diagonal elements
-            diag = torch.diag(self.gen_model.R.squeeze(0) + torch.diag(self.delta_R))
-            off_diag = self.gen_model.R.squeeze(0) + torch.diag(self.delta_R) - torch.diag(diag)
+                # # Get the diagonal and off-diagonal elements
+                # delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
+                # # diag = torch.diag(self.gen_model.R.squeeze(0) + torch.diag(delta_R))
+                # diag = torch.diag(self.gen_model.R.squeeze(0)) + delta_R # (batch_size, ntrials, x_dim)
+                # # off_diag = self.gen_model.R.squeeze(0) + torch.diag(delta_R) - torch.diag(diag)
+                
+                # # Clamp the diagonal elements
+                # diag = diag.clamp_min(1e-6)
 
-            # Clamp the diagonal elements
-            diag = diag.clamp_min(1e-6)
+                # return torch.diag_embed(diag) # (batch_size, ntrials, x_dim, x_dim)
+                # # Add the clamped diagonal elements back to the off-diagonal elements
+                # # R = off_diag + torch.diag(diag)
+                
+                # delta_R changes log(sigma_x) #TODO: not compatible with single_sigma_x
+                delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
+                new_log_sigma_x = self.gen_model.log_sigma_x + delta_R
+                new_var_x = torch.exp(new_log_sigma_x) + 1e-6
+                return torch.diag_embed(new_var_x) # (batch_size, ntrials, x_dim, x_dim)
 
-            # Add the clamped diagonal elements back to the off-diagonal elements
-            R = off_diag + torch.diag(diag)
-
-            return R[None, ...]
+            else:
+                # delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
+                pass
 
     def train_full_model(self, train_params_gen, train_params_recognition):
         self.gen_model.train_supervised_model(train_params_gen)
@@ -655,7 +664,8 @@ class RecognitionModel(Module):
 
         self.fit(dataloader, train_params_recognition)
     
-    def get_x_tilde(self, y: Tensor):
+    def get_x_tilde(self, y: Tensor, only_x_tilde=True):
+        delta_R = None
         # y is (ntrials, N, batch_size)
         if not self.cov_change:
             x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
@@ -664,34 +674,36 @@ class RecognitionModel(Module):
             # Assume for now that the first x_dim elements are for x_tilde and the next element is for R
             x_tilde = tilde[..., :self.gen_model.x_dim] # (ntrials, batch_size, x_dim)
 
-            # gamma = 2 * torch.sigmoid(torch.mean(tilde[..., -1])) # (1, )
-            # self.gamma = gamma
-
-            delta_R = torch.mean(tilde[..., self.gen_model.x_dim:], dim=(0,1)) # (x_dim, )
-            assert len(delta_R) == self.gen_model.x_dim
-            self.delta_R = delta_R 
+            delta_R = tilde[..., self.gen_model.x_dim:] # (ntrials, batch_size, x_dim)
+            delta_R = delta_R.transpose(1,0) # (batch_size, ntrials, x_dim)
 
 
         x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
         if self.zero_mean_x_tilde:
             x_tilde = x_tilde - x_tilde.mean(dim=(0,2), keepdim=True)
-        return x_tilde
+        if only_x_tilde:
+            return x_tilde
+        else:
+            return {'x_tilde': x_tilde, 'delta_R': delta_R}
     
-    def sample_matheron_pert(self, n_mc: int, trials):
+    def sample_matheron_pert(self, n_mc: int, trials, pseudo_obs=None):
         z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
         pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
         # noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
-        noise = torch.linalg.cholesky(self.gen_model_matrices) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
+        R = self.gen_model_R(pseudo_obs)
+        if len(R.shape) != 2:
+
+            R = R.transpose(0, 1) # (ntrials, T, x_dim, x_dim)
+        noise = torch.linalg.cholesky(R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
     
-    def kalman_covariance(self, T=None, get_sigma_tilde=False): # return all matrices independent of observations
+    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None): # return all matrices independent of observations
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model.W.squeeze(0) # (x_dim, b)
         Q = self.gen_model.Q.squeeze(0) # (b, b)
-        # R = self.gen_model.R.squeeze(0)
-        R = self.gen_model_matrices.squeeze(0)
+        R = self.gen_model_R(pseudo_obs)
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
         x_dim = self.gen_model.x_dim
@@ -762,13 +774,13 @@ class RecognitionModel(Module):
                     batch_weight = batch_trials / self.gen_model.ntrials
                     # NN pseudo observations
                     # y = y.transpose(-1, 0) # (ntrials, N, batch_size)
-                    x_tilde = self.get_x_tilde(y) # (ntrials, x_dim, batch_size)
-
+                    pseudo_obs = self.get_x_tilde(y, only_x_tilde=False)
+                    x_tilde = pseudo_obs['x_tilde'] # (ntrials, x_dim, batch_size)
                     # Matheron psuedo observations
-                    matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
+                    matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials, pseudo_obs) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     if self.cov_change:
-                        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+                        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
                     loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol)
                     loss *= -1 # negative LL
 
@@ -800,7 +812,7 @@ class RecognitionModel(Module):
             self.entropy_vals.append(np.sum(entropy_vals)/(Z))
             self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
-                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1], 'Gamma', self.gamma.item(), 'dR_max', torch.max(self.delta_R).item(), 'dR_min', torch.min(self.delta_R).item())
+                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1])
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
         # y is (ntrials, N, batch_size)
@@ -821,8 +833,9 @@ class RecognitionModel(Module):
         # return posterior mean on test data
         
         # test_y is (ntrials, N, T_test)
-        x_tilde = self.get_x_tilde(test_y) # (ntrials, x_dim, T_test)
-        _, _, Ks, Cs = self.kalman_covariance(T=test_y.shape[-1]) # TODO: should I use prev_mu and prev_Sigma?
+        pseudo_obs = self.get_x_tilde(test_y, only_x_tilde=False) # (ntrials, x_dim, T_test)
+        x_tilde = pseudo_obs['x_tilde']
+        _, _, Ks, Cs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs) # TODO: should I use prev_mu and prev_Sigma?
         _ , mus_smooth, _ = self.kalman_means(x_tilde[None, ...], Ks, Cs) # (T_test, 1, ntrials, b)
         mus_smooth = mus_smooth.squeeze(1) # (T_test, ntrials, b)
         return mus_smooth.permute(1, 2, 0) # (ntrials, b, T_test)

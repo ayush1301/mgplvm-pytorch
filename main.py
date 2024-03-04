@@ -587,6 +587,11 @@ class RecognitionModel(Module):
                     head_names=['x_tilde', 'R'],
                     head_layer_sizes=[[gen_model.x_dim,], [gen_model.x_dim,]]
                 )
+                # self.neural_net = MultiHeadRNN(
+                #     input_size=gen_model.N,
+                #     hidden_size=hidden_layer_size,
+                #     output_sizes={'x_tilde': gen_model.x_dim, 'delta_R': gen_model.x_dim, 'delta_W': gen_model.x_dim * gen_model.b}
+                # ).to(device)
             else:
                 self.neural_net = torch.nn.Sequential(
                     torch.nn.Linear(gen_model.N, hidden_layer_size),
@@ -597,7 +602,10 @@ class RecognitionModel(Module):
             self.neural_net = neural_net.to(device)
         self.cov_change = cov_change
         self.zero_mean_x_tilde = zero_mean_x_tilde
-    
+
+        # For debugging
+        self.dWs = []
+        self.dRs = []
     def training_params(self, **kwargs): # code from mgp
         params = {
             'max_steps': 1001,
@@ -611,6 +619,7 @@ class RecognitionModel(Module):
             'n_mc_z': 32,
             'accumulate_gradient': True,
             'batch_mc_z': None,
+            'print_deltas': False,
         }
 
         for key, value in kwargs.items():
@@ -646,13 +655,26 @@ class RecognitionModel(Module):
                 
                 # delta_R changes log(sigma_x) #TODO: not compatible with single_sigma_x
                 delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
+                # print(torch.max(delta_R), torch.min(delta_R))
                 new_log_sigma_x = self.gen_model.log_sigma_x + delta_R
-                new_var_x = torch.exp(new_log_sigma_x) + 1e-6
+                new_var_x = torch.square(torch.exp(new_log_sigma_x)) + 1e-6
+                self.dRs.append((torch.max(delta_R).item(), torch.min(delta_R).item()))
                 return torch.diag_embed(new_var_x) # (batch_size, ntrials, x_dim, x_dim)
 
             else:
                 # delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
                 pass
+    
+    def gen_model_W(self, pseudo_obs):
+        if not self.cov_change or pseudo_obs is None or pseudo_obs['delta_W'] is None:
+            return self.gen_model.W.squeeze(0)
+        else:
+            # delta_W directly changes the W matrix
+            delta_W = pseudo_obs['delta_W'] # (batch_size, ntrials, x_dim, b)
+            self.dWs.append((torch.max(delta_W).item(), torch.min(delta_W).item()))
+            # print(torch.max(delta_W), torch.min(delta_W))
+            
+            return self.gen_model.W.squeeze(0) + delta_W
 
     def train_full_model(self, train_params_gen, train_params_recognition):
         self.gen_model.train_supervised_model(train_params_gen)
@@ -671,16 +693,26 @@ class RecognitionModel(Module):
     
     def get_x_tilde(self, y: Tensor, only_x_tilde=True):
         delta_R = None
+        delta_W = None
         # y is (ntrials, N, batch_size)
         if not self.cov_change:
             x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
         else:
-            tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim+1)
-            # Assume for now that the first x_dim elements are for x_tilde and the next element is for R
-            x_tilde = tilde[..., :self.gen_model.x_dim] # (ntrials, batch_size, x_dim)
+            # tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim+1)
+            # # Assume for now that the first x_dim elements are for x_tilde and the next element is for R
+            # x_tilde = tilde[..., :self.gen_model.x_dim] # (ntrials, batch_size, x_dim)
 
-            delta_R = tilde[..., self.gen_model.x_dim:] # (ntrials, batch_size, x_dim)
-            delta_R = delta_R.transpose(1,0) # (batch_size, ntrials, x_dim)
+            # delta_R = tilde[..., self.gen_model.x_dim:] # (ntrials, batch_size, x_dim)
+            # delta_R = delta_R.transpose(1,0) # (batch_size, ntrials, x_dim)
+
+            # Assume neural_net outputs dictionary
+            pseudo_obs = self.neural_net(y.transpose(-1, -2)) # {'x_tilde': (ntrials, batch_size, x_dim), 'delta_R': (ntrials, batch_size, x_dim), 'delta_W': (ntrials, batch_size, x_dim * b)}
+            x_tilde = pseudo_obs['x_tilde']
+            if 'delta_R' in pseudo_obs:
+                delta_R = pseudo_obs['delta_R'].transpose(1,0) # (batch_size, ntrials, x_dim)
+            if 'delta_W' in pseudo_obs:
+                delta_W = pseudo_obs['delta_W'].transpose(1,0) # (batch_size, ntrials, x_dim * b)
+                delta_W = delta_W.reshape(delta_W.shape[0], delta_W.shape[1], self.gen_model.x_dim, self.gen_model.b) # (batch_size, ntrials, x_dim, b)
 
 
         x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
@@ -689,15 +721,18 @@ class RecognitionModel(Module):
         if only_x_tilde:
             return x_tilde
         else:
-            return {'x_tilde': x_tilde, 'delta_R': delta_R}
+            return {'x_tilde': x_tilde, 'delta_R': delta_R, 'delta_W': delta_W}
     
     def sample_matheron_pert(self, n_mc: int, trials, pseudo_obs=None):
         z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
-        pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
+        W = self.gen_model_W(pseudo_obs)
+        if len(W.shape) != 2:
+            W = W.transpose(0, 1) # (ntrials, T, x_dim, b)
+        pertubation = W @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
+        # pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
         # noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         R = self.gen_model_R(pseudo_obs)
         if len(R.shape) != 2:
-
             R = R.transpose(0, 1) # (ntrials, T, x_dim, x_dim)
         noise = torch.linalg.cholesky(R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
@@ -706,7 +741,8 @@ class RecognitionModel(Module):
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
-        W = self.gen_model.W.squeeze(0) # (x_dim, b)
+        # W = self.gen_model.W.squeeze(0) # (x_dim, b)
+        W = self.gen_model_W(pseudo_obs)
         Q = self.gen_model.Q.squeeze(0) # (b, b)
         R = self.gen_model_R(pseudo_obs)
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
@@ -714,9 +750,10 @@ class RecognitionModel(Module):
         x_dim = self.gen_model.x_dim
         return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde)
     
-    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor):
+    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None):
         A = self.gen_model.A.squeeze(0) # (b, b)
-        W = self.gen_model.W.squeeze(0) # (x_dim, b)
+        # W = self.gen_model.W.squeeze(0) # (x_dim, b)
+        W = self.gen_model_W(pseudo_obs)
         b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
         return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs)
@@ -786,7 +823,7 @@ class RecognitionModel(Module):
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     if self.cov_change:
                         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
-                    loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol)
+                    loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs)
                     loss *= -1 # negative LL
 
                     if accumulate_gradient:
@@ -818,13 +855,15 @@ class RecognitionModel(Module):
             self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
             if i % train_params_recognition['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1])
+                if train_params_recognition['print_deltas']:
+                    print('dWs', self.dWs[-1], 'dRs', self.dRs[-1])
 
-    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor):
+    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None):
         # y is (ntrials, N, batch_size)
         # x_hat is (n_mc_z, ntrials, x_dim, batch_size)
 
         # mus_smooth are the samples from the posterior through matheron sampling
-        mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs)
+        mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, ntrials, b), (T, ntrials, b), (T-1, ntrials, b)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
         joint_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None) # (ntrials,) # TODO: batching
         return (entropy + joint_LL).sum(), entropy.sum(), joint_LL.sum()
@@ -841,7 +880,7 @@ class RecognitionModel(Module):
         pseudo_obs = self.get_x_tilde(test_y, only_x_tilde=False) # (ntrials, x_dim, T_test)
         x_tilde = pseudo_obs['x_tilde']
         _, _, Ks, Cs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs) # TODO: should I use prev_mu and prev_Sigma?
-        _ , mus_smooth, _ = self.kalman_means(x_tilde[None, ...], Ks, Cs) # (T_test, 1, ntrials, b)
+        _ , mus_smooth, _ = self.kalman_means(x_tilde[None, ...], Ks, Cs, pseudo_obs=pseudo_obs) # (T_test, 1, ntrials, b)
         mus_smooth = mus_smooth.squeeze(1) # (T_test, ntrials, b)
         return mus_smooth.permute(1, 2, 0) # (ntrials, b, T_test)
     

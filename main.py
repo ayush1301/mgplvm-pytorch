@@ -891,7 +891,7 @@ class RecognitionModel(Module):
         plt.show()
 
 class Preprocessor(Module):
-    def __init__(self, v: Tensor, z_dim: int) -> None:
+    def __init__(self, v: Tensor, z_dim: int, noise_scale=1.) -> None:
         # Generative parameters
         # z_t = A z_{t-1} + B w_t
         # v_t = W z_t + varepsilon_t
@@ -903,13 +903,13 @@ class Preprocessor(Module):
         self.z_dim = z_dim # dimension of the latent space
 
         self.A = torch.nn.Parameter(0.8* torch.randn(self.z_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
-        self.B = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
+        self.B = torch.nn.Parameter(noise_scale * torch.eye(self.z_dim).to(device))
         self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         # self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
         self.mu0 = torch.nn.Parameter(torch.zeros(self.z_dim).to(device))
-        self.Sigma0_half = torch.nn.Parameter(0.1 * torch.eye(self.z_dim).to(device))
+        self.Sigma0_half = torch.nn.Parameter(noise_scale * torch.eye(self.z_dim).to(device))
         # self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
-        self.R_half = torch.nn.Parameter(0.1 * torch.eye(self.v_dim).to(device))
+        self.R_half = torch.nn.Parameter(noise_scale/10 * torch.eye(self.v_dim).to(device))
 
     # @property
     # def sigma_v(self):
@@ -926,7 +926,7 @@ class Preprocessor(Module):
     
     @property
     def R(self):
-        # self.R_half.data = torch.tril(self.R_half.data)
+        self.R_half.data = torch.tril(self.R_half.data)
         jitter = torch.eye(self.v_dim).to(self.R_half.device) * 1e-6
         return self.R_half @ self.R_half.T + jitter
     

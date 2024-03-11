@@ -575,7 +575,7 @@ class RNNModel(Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -1067,7 +1067,7 @@ class Preprocessor(Module):
                 v = v_transposed.transpose(-1, 0) # (ntrials, v_dim, batch_size)
                 Sigmas_diffused, Ks = self.kalman_covariance() # (T-1, z_dim, z_dim), (T, z_dim, v_dim)
                 mus_diffused = self.kalman_means(v, Ks) # (T, ntrials, z_dim)
-                loss = -self.LL(v, mus_diffused, Sigmas_diffused).sum()
+                loss = -self.log_marginal(v, mus_diffused, Sigmas_diffused).sum()
                 loss.backward()
                 optimizer.step()
                 self.LLs.append(-loss.item()/(self.v_dim * self.T * self.v.shape[0]))
@@ -1075,9 +1075,10 @@ class Preprocessor(Module):
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
 
-    def LL(self, v: Tensor, mus_diffused, Sigmas_diffused):
+    # returns p(v_{1:T})
+    def log_marginal(self, v: Tensor, mus_diffused, Sigmas_diffused):
         # v is (ntrials, v_dim, T)
-        # return log likelihood of v
+        # return log marginal likelihood of v
         # mus_diffused is (T-1, ntrials, z_dim)
         # Sigmas_diffused is (T-1, 1, z_dim, z_dim)
         # print(mus_diffused.shape, Sigmas_diffused.shape)
@@ -1123,3 +1124,17 @@ class Preprocessor(Module):
             z_s[..., t] = (self.A @ z_s[..., t-1][..., None] + torch.linalg.cholesky(self.Q) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
             samples[..., t] = (self.W @ z_s[..., t][..., None] + torch.linalg.cholesky(self.R) @ torch.randn(trials, self.v_dim, 1).to(device)).squeeze(-1)
         return samples
+    
+    # returns p(v_{1:T}|z_{1:T})
+    def log_lik(self, z: Tensor):
+        # z is (n_mc, ntrials, z_dim, T)
+        # return log likelihood of v given z averaged over MC samples
+
+        mu = self.W @ z # (n_mc, ntrials, v_dim, T)
+        mu = mu.transpose(-1, -2) # (n_mc, ntrials, T, v_dim)
+        
+        #TODO assume R_half is nice cholesky form
+        dist = MultivariateNormal(mu, scale_tril=self.R_half[None, None, ...])
+        v = self.v.transpose(-1, -2) # (ntrials, T, v_dim)
+        ll = dist.log_prob(v[None, ...]) # (n_mc, ntrials, T)
+        return ll.sum(axis=-1).mean(axis=0) # (ntrials,) 

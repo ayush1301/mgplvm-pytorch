@@ -579,7 +579,7 @@ class RNNModel(Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -606,10 +606,11 @@ class RecognitionModel(Module):
                 ).to(device)
         else:
             self.neural_net = neural_net.to(device)
-        self.cov_change = cov_change
+        self.cov_change = cov_change # Time varying LDS
         self.zero_mean_x_tilde = zero_mean_x_tilde
 
         self.preprocessor = preprocessor
+        self.gen_model_fixed = gen_model_fixed # False if the generative model is also being trained
 
         # For debugging
         self.dWs = []
@@ -764,7 +765,6 @@ class RecognitionModel(Module):
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
-        # W = self.gen_model.W.squeeze(0) # (x_dim, b)
         W = self.gen_model_W(pseudo_obs)
         Q = self.gen_model.Q.squeeze(0) # (b, b)
         R = self.gen_model_R(pseudo_obs)
@@ -775,7 +775,6 @@ class RecognitionModel(Module):
     
     def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None):
         A = self.gen_model.A.squeeze(0) # (b, b)
-        # W = self.gen_model.W.squeeze(0) # (x_dim, b)
         W = self.gen_model_W(pseudo_obs)
         b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
@@ -810,7 +809,8 @@ class RecognitionModel(Module):
         accumulate_gradient = train_params_recognition['accumulate_gradient']
 
         optimizer = train_params_recognition['optimizer']
-        optimizer = optimizer(self.neural_net.parameters(), lr=lrate)
+        # optimizer = optimizer(self.neural_net.parameters(), lr=lrate)
+        optimizer = optimizer(self.parameters(), lr=lrate)
         scheduler = StepLR(optimizer, step_size=train_params_recognition['step_size'], gamma=train_params_recognition['gamma'])
 
         if batch_mc_z is None:
@@ -825,7 +825,8 @@ class RecognitionModel(Module):
         self.y_LL_vals = []
         self.prior_LL_vals = []
         self.v_LL_vals = []
-        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+        if self.gen_model_fixed and not self.cov_change:
+            _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
         for i in range(max_steps):
             loss_vals = []
@@ -855,7 +856,7 @@ class RecognitionModel(Module):
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials, pseudo_obs) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
-                    if self.cov_change:
+                    if self.cov_change or not self.gen_model_fixed:
                         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
                     loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v)
                     loss *= -1 # negative LL

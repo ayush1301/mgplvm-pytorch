@@ -15,7 +15,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class Preprocessor(Module):
-    def __init__(self, v: Tensor, z_dim: int, noise_scale=1.) -> None:
+    def __init__(self, v: Tensor, z_dim: int, noise_scale=1., W=None, R_half=None) -> None:
         # Generative parameters
         # z_t = A z_{t-1} + B w_t
         # v_t = W z_t + varepsilon_t
@@ -30,12 +30,18 @@ class Preprocessor(Module):
         # self.pre_A_eig = torch.nn.Parameter(torch.randn(self.z_dim).to(device))
         # self._S = torch.nn.Parameter(torch.randn(self.z_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         self.B = torch.nn.Parameter(noise_scale * torch.eye(self.z_dim).to(device))
-        self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
+        if W is not None:
+            self.W = torch.nn.Parameter(W.to(device))
+        else:
+            self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         # self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
         self.mu0 = torch.nn.Parameter(torch.zeros(self.z_dim).to(device))
         self.Sigma0_half = torch.nn.Parameter(noise_scale * torch.eye(self.z_dim).to(device))
         # self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
-        self.R_half = torch.nn.Parameter(noise_scale/10 * torch.eye(self.v_dim).to(device))
+        if R_half is not None:
+            self.R_half = torch.nn.Parameter(R_half.to(device))
+        else:
+            self.R_half = torch.nn.Parameter(noise_scale/10 * torch.eye(self.v_dim).to(device))
 
     # @property
     # def sigma_v(self):
@@ -226,8 +232,7 @@ class Preprocessor(Module):
             samples[..., t] = (self.W @ z_s[..., t][..., None] + torch.linalg.cholesky(self.R) @ torch.randn(trials, self.v_dim, 1).to(device)).squeeze(-1)
         return samples
     
-    # returns p(v_{1:T}|z_{1:T})
-    def log_lik(self, z: Tensor):
+    def log_lik(self, z: Tensor, v: Tensor):
         # z is (n_mc, ntrials, z_dim, T)
         # return log likelihood of v given z averaged over MC samples
 
@@ -236,6 +241,6 @@ class Preprocessor(Module):
         
         #TODO assume R_half is nice cholesky form
         dist = MultivariateNormal(mu, scale_tril=self.R_half[None, None, ...])
-        v = self.v.transpose(-1, -2) # (ntrials, T, v_dim)
+        v = v.transpose(-1, -2) # (ntrials, T, v_dim)
         ll = dist.log_prob(v[None, ...]) # (n_mc, ntrials, T)
         return ll.sum(axis=-1).mean(axis=0) # (ntrials,) 

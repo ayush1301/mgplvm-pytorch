@@ -7,7 +7,7 @@ from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial, N
 from itertools import chain
 import torch.distributions as dists
 from torch import optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.nn import Module
 from torch.optim.lr_scheduler import StepLR, LambdaLR
 from preprocessor import Preprocessor
@@ -396,7 +396,8 @@ class LDS(GenerativeModel):
                  n_mc, # number of samples for x
                  z, # (ntrials, b, T) OR (n_mc_z, ntrials, b, T)
                  Y, # (ntrials, N, T)
-                 prev_z # (ntrials, b) OR (n_mc_z, ntrials, b)
+                 prev_z, # (ntrials, b) OR (n_mc_z, ntrials, b)
+                 ret_only_joint=True
                  ):
         # Natural parameters for p(x_t|v_t)
         ntrials, N, T = Y.shape # Only T is different from self.Y.shape
@@ -449,8 +450,10 @@ class LDS(GenerativeModel):
 
         # print(second_big.shape)
         second = second_small + second_big
-
-        return first + second
+        if ret_only_joint:
+            return first + second
+        else:
+            return first+second, first, second # p(y_{1:T}|z_{1:T}), p(z_{1:T})
     
     def sample_z(self, n_mc: int, trials, prev_z=None): # Sample z from the prior of the LDS
         # prev_z is (n_mc, ntrials, b)
@@ -606,6 +609,8 @@ class RecognitionModel(Module):
         self.cov_change = cov_change
         self.zero_mean_x_tilde = zero_mean_x_tilde
 
+        self.preprocessor = preprocessor
+
         # For debugging
         self.dWs = []
         self.dRs = []
@@ -701,12 +706,11 @@ class RecognitionModel(Module):
         self.train_recognition_model(train_params_recognition)
         
     def train_recognition_model(self, train_params_recognition):
-        # dataset = Dataset(self.gen_model.Y)
-
-        # So that the last dimension is the batch dimension
-        # transposed_Y = self.gen_model.Y.transpose(0, -1) # (T, N, ntrials)
-        # dataloader = DataLoader(transposed_Y, batch_size=train_params_recognition['batch_size'])
-        dataloader = DataLoader(self.gen_model.Y, batch_size=train_params_recognition['batch_size'])
+        if self.preprocessor is None:
+            dataloader = DataLoader(self.gen_model.Y, batch_size=train_params_recognition['batch_size'])
+        else:
+            dataset = TensorDataset(self.gen_model.Y, self.preprocessor.v)
+            dataloader = DataLoader(dataset, batch_size=train_params_recognition['batch_size'])
 
         self.fit(dataloader, train_params_recognition)
     
@@ -818,21 +822,32 @@ class RecognitionModel(Module):
 
         self.LLs = []
         self.entropy_vals = []
-        self.joint_LL_vals = []
+        self.y_LL_vals = []
+        self.prior_LL_vals = []
+        self.v_LL_vals = []
         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
         for i in range(max_steps):
             loss_vals = []
             entropy_vals = []
-            joint_LL_vals = []
+            prior_LL_vals = []
+            y_LL_vals = []
+            v_LL_vals = []
             prev_mu = None
             prev_Sigma = None
             prev_z = None
             for batch_mc_z in mc_batches:
                 mc_weight = batch_mc_z / n_mc_z # fraction of the total samples
-                for y in data: # loop over batches TODO
+                for _data in data: # loop over batches TODO
+                    if isinstance(_data, list):
+                        y = _data[0]
+                        v = _data[1]
+                    else:
+                        y = _data
+                        v = None
                     batch_trials = y.shape[0]
-                    batch_weight = batch_trials / self.gen_model.ntrials
+                    # batch_weight = batch_trials / self.gen_model.ntrials
+                    batch_weight = 1
                     # NN pseudo observations
                     # y = y.transpose(-1, 0) # (ntrials, N, batch_size)
                     pseudo_obs = self.get_x_tilde(y, only_x_tilde=False)
@@ -842,16 +857,20 @@ class RecognitionModel(Module):
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     if self.cov_change:
                         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
-                    loss, entropy, joint = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs)
+                    loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v)
                     loss *= -1 # negative LL
 
                     if accumulate_gradient:
                         loss = loss * mc_weight * batch_weight
                         entropy = entropy * mc_weight * batch_weight
-                        joint = joint * mc_weight * batch_weight
+                        y_LL = y_LL * mc_weight * batch_weight
+                        prior_LL = prior_LL * mc_weight * batch_weight
+                        v_LL = v_LL * mc_weight * batch_weight
                     loss_vals.append(loss.item())
                     entropy_vals.append(entropy.item())
-                    joint_LL_vals.append(joint.item())
+                    prior_LL_vals.append(prior_LL.item())
+                    y_LL_vals.append(y_LL.item())
+                    v_LL_vals.append(v_LL.item())
 
                     loss.backward()
 
@@ -868,12 +887,21 @@ class RecognitionModel(Module):
                 optimizer.zero_grad()
                 
             scheduler.step()
-            Z = self.gen_model.T * self.gen_model.ntrials * self.gen_model.N
-            self.LLs.append(-np.sum(loss_vals)/(Z))
-            self.entropy_vals.append(np.sum(entropy_vals)/(Z))
-            self.joint_LL_vals.append(np.sum(joint_LL_vals)/(Z))
+            Z_y = self.gen_model.T * self.gen_model.ntrials * self.gen_model.N
+            Z_z = self.gen_model.T * self.gen_model.ntrials * self.gen_model.b
+            if v is not None:
+                Z_v = self.gen_model.T * self.gen_model.ntrials * self.preprocessor.v_dim
+            else:
+                Z_v = 0
+            self.LLs.append(-np.sum(loss_vals)/(Z_y + Z_v))
+            self.entropy_vals.append(np.sum(entropy_vals)/(Z_z)) # TODO: this scaling may be incorrect
+            self.y_LL_vals.append(np.sum(y_LL_vals)/(Z_y))
+            self.prior_LL_vals.append(np.sum(prior_LL_vals)/(Z_z))
+            if Z_v == 0:
+                Z_v = 1
+            self.v_LL_vals.append(np.sum(v_LL_vals)/(Z_v))
             if i % train_params_recognition['print_every'] == 0:
-                print('step', i, 'LL', self.LLs[-1], 'Entropy', self.entropy_vals[-1], 'Joint LL', self.joint_LL_vals[-1])
+                print('step {} LL {:.4f} Entropy {:.4f} ln p(y|z) {:.4f} ln p(z) {:.4f} ln p(v|z) {:.4f}'.format(i, self.LLs[-1], self.entropy_vals[-1], self.y_LL_vals[-1], self.prior_LL_vals[-1], self.v_LL_vals[-1]))
                 if train_params_recognition['print_deltas']:
                     print_str = ''
                     if len(self.dWs) > 0:
@@ -882,15 +910,19 @@ class RecognitionModel(Module):
                         print_str += 'dRs: ' + str(self.dRs[-1])
                     print(print_str)
 
-    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None):
+    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None):
         # y is (ntrials, N, batch_size)
         # x_hat is (n_mc_z, ntrials, x_dim, batch_size)
 
         # mus_smooth are the samples from the posterior through matheron sampling
-        mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, ntrials, b), (T, ntrials, b), (T-1, ntrials, b)
+        mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, n_mc_z, ntrials, b), (T, n_mc_z, ntrials, b), (T-1, n_mc_z, ntrials, b)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
-        joint_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None) # (ntrials,) # TODO: batching
-        return (entropy + joint_LL).sum(), entropy.sum(), joint_LL.sum()
+        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False) # (ntrials,) # TODO: batching
+        if v is not None:
+            v_LL = self.preprocessor.log_lik(mus_smooth.permute(1,2,3,0), v)
+        else:
+            v_LL = torch.zeros(joint_LL.shape).to(device)
+        return (entropy + joint_LL + v_LL).sum(), entropy.sum(), y_LL.sum(), prior_LL.sum(), v_LL.sum()
     
     def freeze_params(self):
         for param in self.neural_net.parameters():

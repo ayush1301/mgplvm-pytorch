@@ -10,7 +10,7 @@ from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from torch.nn import Module
 from torch.optim.lr_scheduler import StepLR, LambdaLR
-from main import *
+from utils import general_kalman_covariance, general_kalman_means
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -68,9 +68,9 @@ class Preprocessor(Module):
 
     def reg(self, x):
         # Compute the exponential of the diagonal elements and add a small constant
-        xd = torch.exp(torch.diag(x)) + 1e-2
+        xd = torch.exp(torch.diag(x))
         # Extract the strictly upper triangular part of x
-        xt = torch.tril(x)
+        xt = torch.tril(x, diagonal=-1)
         # Recombine into a new matrix with adjusted diagonal and original upper triangular parts
         return torch.diag(xd) + xt
     
@@ -80,12 +80,12 @@ class Preprocessor(Module):
         # jitter = torch.eye(self.v_dim).to(self.R_half.device) * 1e-6
         # return self.R_half @ self.R_half.T + jitter
 
-        R_half = torch.tril(self.R_half)
+        # R_half = torch.tril(self.R_half)
         jitter = torch.eye(self.v_dim).to(self.R_half.device) * 1e-6
-        return R_half @ R_half.T + jitter
+        # return R_half @ R_half.T + jitter
     
-        # R_half = self.reg(self.R_half)
-        # return R_half @ R_half.T
+        R_half = self.reg(self.R_half)
+        return R_half @ R_half.T + jitter
     
     @property
     def Q(self):

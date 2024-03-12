@@ -280,7 +280,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
 class LDS(GenerativeModel):
     def __init__(self, z: Tensor, Y: Tensor, lik, x_dim=None, link_fn=torch.exp,
                  A=None, C=None, W=None, B=None, mu0=None, Sigma0_half=None, sigma_x=None,
-                 trained_z=False, d=0., fixed_d=True, single_sigma_x=False, full_R=False) -> None:
+                 trained_z=False, d=0., fixed_d=True, single_sigma_x=False, full_R=False, analytical_init=False) -> None:
         super().__init__(z, Y, lik)
 
         self.link_fn = link_fn
@@ -351,6 +351,8 @@ class LDS(GenerativeModel):
         self.single_sigma_x = single_sigma_x
         self.full_R = full_R
 
+        if analytical_init:
+            self.analytical_init()
         # print(self.A.shape, self.B.shape, self.C.shape, self.sigma_x.shape, self.mu0.shape, self.Sigma0.shape)
     
     # @property
@@ -471,6 +473,33 @@ class LDS(GenerativeModel):
             prev_z = z_t
 
         return samples
+
+    # Initialise W and R assuming Gaussian noise model
+    def analytical_init(self):
+        assert self.x_dim == self.N # x_dim = N for analytical initialisation
+        y = self.Y - self.Y.mean(dim=(0,-1), keepdim=True)
+        y = y.transpose(-1, -2) # (ntrials, T, N)
+        
+        z = self.z.transpose(-1, -2) # (ntrials, T, b)
+        
+        outer_yz = (y[..., None] @ z[..., None, :]).sum(dim=(0, 1)) # (N, b)
+        outer_zz = (z[..., None] @ z[..., None, :]).sum(dim=(0, 1)) # (b, b)
+        W = outer_yz @ torch.linalg.inv(outer_zz) # (N, b)
+
+        outer_yy = (y[..., None] @ y[..., None, :]).sum(dim=(0, 1)) # (N, N)
+        outer_zy = (z[..., None] @ y[..., None, :]).sum(dim=(0, 1)) # (b, N)
+        R = (outer_yy - W @ outer_zy)/(self.T * self.ntrials) # (N, N)
+
+        self.W.data = W[None, ...] # (1, N, b)
+        R_half = torch.linalg.cholesky(R)
+        log_diag_R_half = torch.log(torch.diag(R_half))
+        
+        if self.full_R:
+            self.R_half.data = torch.tril(R_half, diagonal=-1) + torch.diag(log_diag_R_half)
+        else:
+            assert self.single_sigma_x == False
+            self.log_sigma_x.data = log_diag_R_half
+
 
 
 class Noise(Module, abc.ABC):

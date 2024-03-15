@@ -151,36 +151,13 @@ class LDS(GenerativeModel):
         # Generative parameters
         if A is None:
             A = 0.8 * torch.randn(1, self.b, self.b).to(device) / np.sqrt(self.b)
-            # A = torch.eye(self.b)[None, ...].to(device)
 
         if C is None:
             C = torch.randn(1, self.N, self.x_dim).to(device) / np.sqrt(self.x_dim)
 
-            # # Create an identity matrix of size x_dim
-            # identity = torch.eye(self.x_dim).to(device)
-
-            # # Repeat the identity matrix N//x_dim times
-            # C = identity.repeat(self.N//self.x_dim, 1)
-
-            # # If N is not a multiple of x_dim, append the remaining rows with zeros
-            # if self.N % self.x_dim != 0:
-            #     zeros = torch.zeros((self.N % self.x_dim, self.x_dim)).to(device)
-            #     C = torch.cat((C, zeros))
-
-            # # Reshape C to have shape (1, N, x_dim)
-            # C = C.unsqueeze(0)
-
         if W is None:
             W = torch.randn(1, self.x_dim, self.b).to(device) / np.sqrt(self.b)
 
-            # # Create an identity matrix of size x_dim
-            # identity = torch.eye(self.x_dim).to(device)
-
-            # # Slice the identity matrix to get the first b columns
-            # W = identity[:, :self.b]
-
-            # # Reshape W to have shape (1, x_dim, b)
-            # W = W.unsqueeze(0)
         if B is None:
             # B = torch.rand(1, self.b, self.b).to(device)
             B = torch.eye(self.b)[None, ...].to(device)
@@ -275,8 +252,6 @@ class LDS(GenerativeModel):
         mu = W @ z # (n_mc_z, ntrials, x_dim, T)
         samples = torch.randn(n_mc, n_mc_z, ntrials, self.x_dim, T).to(device)
 
-        # samples = self.sigma_x * samples + mu[None, ...]
-        # samples = torch.diag(self.sigma_x) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
         samples = torch.linalg.cholesky(self.R.squeeze(0)) @ samples + mu[None, ...] # (n_mc, n_mc_z, ntrials, x_dim, T)
 
         # print(samples.shape)

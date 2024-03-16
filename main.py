@@ -12,6 +12,7 @@ from torch.nn import Module
 from torch.optim.lr_scheduler import StepLR, LambdaLR
 from preprocessor import Preprocessor
 from utils import general_kalman_covariance, general_kalman_means
+from enum import Enum
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -30,6 +31,9 @@ class MyDataset(Dataset):
         inputs, outputs = zip(*batch)  # Separate the inputs and outputs
         return torch.stack(inputs, dim=2), torch.stack(outputs, dim=2)  # Stack along a new last dimension
 
+class BATCHING(Enum):
+    TIME = 1
+    TRIALS = 2
 class GenerativeModel(Module, metaclass=abc.ABCMeta):
     def __init__(self, 
                  z: Tensor, 
@@ -53,7 +57,6 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
         self.lik = lik
 
     def training_params(self, **kwargs): # code from mgp
-
         params = {
             'max_steps': 1001,
             'step_size': 100,
@@ -67,6 +70,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             'batch_mc': None,
             'burnin': 100,
             'StepLR': True,
+            'batch_type': BATCHING.TIME
         }
 
         for key, value in kwargs.items():
@@ -76,15 +80,28 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
                 print('adding', key)
 
         if params['batch_size'] is None:
-            params['batch_size'] = self.T
+            if params['batch_type'] == BATCHING.TIME:
+                params['batch_size'] = self.T
+            elif params['batch_type'] == BATCHING.TRIALS:
+                params['batch_size'] = self.ntrials
+
 
         return params
 
     def train_supervised_model(self, train_params):
-        dataset = MyDataset(self.z, self.Y)
-        dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], collate_fn=MyDataset.my_collate_fn, shuffle=False)
-
-        self.fit(dataloader, train_params)
+        batching = train_params['batch_type']
+        if batching == BATCHING.TIME:
+            dataset = MyDataset(self.z, self.Y)
+            dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], collate_fn=MyDataset.my_collate_fn, shuffle=False)
+            self.fit(dataloader, train_params)
+        elif batching == BATCHING.TRIALS:
+            dataset = TensorDataset(self.z, self.Y)
+            if self.ntrials % train_params['batch_size'] != 0:
+                print('Warning: batch_size does not divide ntrials')
+            dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=False)
+            self.fit(dataloader, train_params)
+        else:
+            raise ValueError('Invalid batching type')
 
     def fit(self, data: DataLoader, train_params):
         # set learning rate schedule so sigma updates have a burn-in period
@@ -107,15 +124,24 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             prev_z = None
             loss_vals = []
             for z, y in data: # loop over batches
-                loss = -self.joint_LL(n_mc, z, y, prev_z).sum() # TODO: should I use mean??
+                # print(z.shape, y.shape)
+                loss = -self.joint_LL(n_mc, z, y, prev_z).mean() # TODO: should I use mean??
                 loss.backward()
                 loss_vals.append(loss.item())
+                if not train_params['accumulate_gradient']:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                if train_params['batch_type'] == BATCHING.TIME:
+                    prev_z = z[..., -1] # (ntrials, b)
+                loss_vals.append(loss.item())
+
+            if train_params['accumulate_gradient']:
                 optimizer.step()
                 optimizer.zero_grad()
-                prev_z = z[..., -1] # (ntrials, b)
+
             scheduler.step()
-            Z = self.T * self.ntrials * self.N + self.T * self.ntrials * self.b # TODO: check this
-            self.LLs.append(-np.sum(loss_vals)/Z)
+            Z = self.T * (self.N + self.b) # TODO: check this
+            self.LLs.append(-np.mean(loss_vals)/Z)
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
     

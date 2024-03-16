@@ -455,14 +455,17 @@ class MultiHeadNetwork(Module):
         for i, head in enumerate(self.heads):
             ret[self.head_names[i]] = head(x)
     
-class RNNModel(Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(RNNModel, self).__init__()
-        self.rnn = torch.nn.RNN(input_size, hidden_size, batch_first=True)
-        self.fc = torch.nn.Linear(hidden_size, output_size)
+class MyLSTMModel(torch.nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, bidirectional=True):
+        super(MyLSTMModel, self).__init__()
+        self.lstm = torch.nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=bidirectional)
+        if bidirectional:
+            self.fc = torch.nn.Linear(hidden_size * 2, output_size)
+        else:
+            self.fc = torch.nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        out, _ = self.rnn(x)
+        out, _ = self.lstm(x)
         out = self.fc(out)
         return out
 
@@ -473,7 +476,7 @@ class RecognitionModel(Module):
         # Define a 2 layer MLP with hidden_layer_size hidden units
         if neural_net is None:
             if rnn:
-                self.neural_net = RNNModel(gen_model.N, hidden_layer_size, gen_model.x_dim).to(device)
+                self.neural_net = MyLSTMModel(gen_model.N, hidden_layer_size, gen_model.x_dim).to(device)
             elif cov_change:
                 self.neural_net = MultiHeadNetwork(
                     input_size=gen_model.N,

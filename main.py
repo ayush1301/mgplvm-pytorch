@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import StepLR, LambdaLR
 from preprocessor import Preprocessor
 from utils import general_kalman_covariance, general_kalman_means
 from enum import Enum
+import dill
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -70,7 +71,9 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             'batch_mc': None,
             'burnin': 100,
             'StepLR': True,
-            'batch_type': BATCHING.TIME
+            'batch_type': BATCHING.TIME,
+            'save_every': None,
+            'save_name': None,
         }
 
         for key, value in kwargs.items():
@@ -144,7 +147,8 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             self.LLs.append(-np.mean(loss_vals)/Z)
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
-    
+            if train_params['save_every'] is not None and i % train_params['save_every'] == 0:
+                dill.dump(self, open(train_params['save_name'] + '.pkl', 'wb'))
     @property
     def prms(self):
         # return chain(self.parameters(), self.lik.parameters())
@@ -520,6 +524,8 @@ class RecognitionModel(Module):
             'accumulate_gradient': True,
             'batch_mc_z': None,
             'print_deltas': False,
+            'save_every': None,
+            'save_name': None,
         }
 
         for key, value in kwargs.items():
@@ -801,6 +807,8 @@ class RecognitionModel(Module):
                     if len(self.dRs) > 0:
                         print_str += 'dRs: ' + str(self.dRs[-1])
                     print(print_str)
+            if train_params_recognition['save_every'] is not None and i % train_params_recognition['save_every'] == 0:
+                dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None):
         # y is (ntrials, N, batch_size)

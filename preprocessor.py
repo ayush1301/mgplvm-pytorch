@@ -251,3 +251,16 @@ class Preprocessor(Module):
         v = v.transpose(-1, -2) # (ntrials, T, v_dim)
         ll = dist.log_prob(v[None, ...]) # (n_mc, ntrials, T)
         return ll.sum(axis=-1).mean(axis=0) # (ntrials,) 
+
+    # Get smoothed or filtered mean using the trained LDS values
+    def get_z_hat(self, v: Tensor, smoothing=True, flatten=False) -> Tensor:
+        # v is (ntrials, v_dim, T)
+        # return z_hat (ntrials, z_dim, T) or flatten = True -> (1, z_dim, T*ntrials)
+        T = v.shape[-1]
+        _, _, Ks, Cs = general_kalman_covariance(self.A, self.W, self.Q, self.R, self.z_dim, self.v_dim, self.Sigma0, T=T, smoothing=smoothing)
+        _ , z_hat, _ = general_kalman_means(self.A, self.W, self.z_dim, self.mu0, v[None, ...].to(device), Ks, Cs=Cs, smoothing=smoothing)
+        z_hat = z_hat.squeeze(1).permute(1, -1, 0) # (ntrials, z_dim, T)
+        if flatten:
+            z_hat = z_hat.permute(1,0,2).reshape(self.z_dim, 1, -1).permute(1,0,2) # (1, z_dim, T*ntrials)
+        else:
+            return z_hat

@@ -12,7 +12,7 @@ from torch.nn import Module
 from torch.optim.lr_scheduler import StepLR, LambdaLR
 from utils import general_kalman_covariance, general_kalman_means
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+import dill
 
 class Preprocessor(Module):
     def __init__(self, v: Tensor, z_dim: int, noise_scale=1., W=None, R_half=None) -> None:
@@ -128,6 +128,7 @@ class Preprocessor(Module):
             'batch_mc': None,
             'betas': (0.9, 0.999),
             'eps': 1e-8,
+            'save_every': None
         }
 
         for key, value in kwargs.items():
@@ -151,14 +152,14 @@ class Preprocessor(Module):
         _, mus_diffused = general_kalman_means(self.A, self.W, self.z_dim, self.mu0, v[None, ...], Ks, Cs=None, smoothing=False)
         return mus_diffused.squeeze(1) # (T, ntrials, z_dim)
 
-    def train_preprocessor(self, train_params):
+    def train_preprocessor(self, train_params, save_name=None):
         # So that the last dimension is the batch dimension
         transposed_v = self.v.transpose(0, -1) # (T, v_dim, ntrials)
         dataloader = DataLoader(transposed_v, batch_size=train_params['batch_size'])
 
-        self.fit(dataloader, train_params)
+        self.fit(dataloader, train_params, save_name=save_name)
     
-    def fit(self, data: DataLoader, train_params):
+    def fit(self, data: DataLoader, train_params, save_name=None):
         lrate = train_params['lrate']
         max_steps = train_params['max_steps']
 
@@ -181,6 +182,8 @@ class Preprocessor(Module):
             scheduler.step()
             if i % train_params['print_every'] == 0:
                 print('step', i, 'LL', self.LLs[-1])
+            if train_params['save_every'] is not None and i % train_params['save_every'] == 0:
+                dill.dump(self, open(save_name + '.pkl', 'wb'))
 
     # returns p(v_{1:T})
     def log_marginal(self, v: Tensor, mus_diffused, Sigmas_diffused):
@@ -222,7 +225,7 @@ class Preprocessor(Module):
         for param in self.parameters():
             param.requires_grad = False
 
-    def sample_v(self, trials, T):
+    def sample_v(self, trials, T, return_z=False):
         z_0 = self.mu0[None, ...] + (torch.linalg.cholesky(self.Sigma0) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
         z_s = torch.zeros(trials, self.z_dim, T, dtype=self.mu0.dtype).to(device)
         z_s[..., 0] = z_0
@@ -230,7 +233,10 @@ class Preprocessor(Module):
         for t in range(1, T):
             z_s[..., t] = (self.A @ z_s[..., t-1][..., None] + torch.linalg.cholesky(self.Q) @ torch.randn(trials, self.z_dim, 1).to(device)).squeeze(-1)
             samples[..., t] = (self.W @ z_s[..., t][..., None] + torch.linalg.cholesky(self.R) @ torch.randn(trials, self.v_dim, 1).to(device)).squeeze(-1)
-        return samples
+        if return_z:
+            return samples, z_s
+        else:
+            return samples
     
     def log_lik(self, z: Tensor, v: Tensor):
         # z is (n_mc, ntrials, z_dim, T)
@@ -240,7 +246,8 @@ class Preprocessor(Module):
         mu = mu.transpose(-1, -2) # (n_mc, ntrials, T, v_dim)
         
         #TODO assume R_half is nice cholesky form
-        dist = MultivariateNormal(mu, scale_tril=self.R_half[None, None, ...])
+        R_half = torch.linalg.cholesky(self.R)
+        dist = MultivariateNormal(mu, scale_tril=R_half[None, None, ...])
         v = v.transpose(-1, -2) # (ntrials, T, v_dim)
         ll = dist.log_prob(v[None, ...]) # (n_mc, ntrials, T)
         return ll.sum(axis=-1).mean(axis=0) # (ntrials,) 

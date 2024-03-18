@@ -460,9 +460,9 @@ class MultiHeadNetwork(Module):
             ret[self.head_names[i]] = head(x)
     
 class MyLSTMModel(torch.nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, bidirectional=True):
+    def __init__(self, input_size, hidden_size, output_size, bidirectional=True, dropout=0.):
         super(MyLSTMModel, self).__init__()
-        self.lstm = torch.nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.lstm = torch.nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=bidirectional, dropout=dropout)
         if bidirectional:
             self.fc = torch.nn.Linear(hidden_size * 2, output_size)
         else:

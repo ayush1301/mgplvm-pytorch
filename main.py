@@ -658,7 +658,7 @@ class RecognitionModel(Module):
         noise = torch.linalg.cholesky(R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
     
-    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None): # return all matrices independent of observations
+    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True): # return all matrices independent of observations
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
@@ -668,14 +668,14 @@ class RecognitionModel(Module):
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
         x_dim = self.gen_model.x_dim
-        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde)
+        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing)
     
-    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None):
+    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None, smoothing=True):
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model_W(pseudo_obs)
         b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
-        return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs)
+        return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs, smoothing)
     
 
     def entropy(self, samples, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol):
@@ -828,17 +828,26 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor):
+    def test_z(self, test_y: Tensor, smoothing=True):
         # TODO batching
         # return posterior mean on test data
         
         # test_y is (ntrials, N, T_test)
         pseudo_obs = self.get_x_tilde(test_y, only_x_tilde=False) # (ntrials, x_dim, T_test)
         x_tilde = pseudo_obs['x_tilde']
-        _, _, Ks, Cs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs) # TODO: should I use prev_mu and prev_Sigma?
-        _ , mus_smooth, _ = self.kalman_means(x_tilde[None, ...], Ks, Cs, pseudo_obs=pseudo_obs) # (T_test, 1, ntrials, b)
-        mus_smooth = mus_smooth.squeeze(1) # (T_test, ntrials, b)
-        return mus_smooth.permute(1, 2, 0) # (ntrials, b, T_test)
+        Covs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs, smoothing=smoothing)
+        Ks = Covs[2]
+        if smoothing:
+            Cs = Covs[3]
+        else:
+            Cs = None
+        mus = self.kalman_means(x_tilde[None, ...], Ks, Cs, pseudo_obs=pseudo_obs, smoothing=smoothing) 
+        if smoothing:
+            z = mus[1] # (T_test, 1, ntrials, b)
+        else:
+            z = mus[0] # (T_test, 1, ntrials, b)
+        z = z.squeeze(1) # (T_test, ntrials, b)
+        return z.permute(1, 2, 0) # (ntrials, b, T_test)
     
     def plot_LL(self):
         plt.plot(self.LLs)

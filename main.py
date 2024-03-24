@@ -71,7 +71,7 @@ class GenerativeModel(Module, metaclass=abc.ABCMeta):
             'batch_mc': None,
             'burnin': 100,
             'StepLR': True,
-            'batch_type': BATCHING.TIME,
+            'batch_type': BATCHING.TRIALS,
             'save_every': None,
             'save_name': None,
         }

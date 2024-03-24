@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 import abc
-from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial, Normal
+from torch.distributions import MultivariateNormal, Poisson, NegativeBinomial, Normal, Bernoulli
 from itertools import chain
 import torch.distributions as dists
 from torch import optim
@@ -264,7 +264,8 @@ class LDS(GenerativeModel):
                  z, # (ntrials, b, T) OR (n_mc_z, ntrials, b, T)
                  Y, # (ntrials, N, T)
                  prev_z, # (ntrials, b) OR (n_mc_z, ntrials, b)
-                 ret_only_joint=True
+                 ret_only_joint=True,
+                 CD_mask = None # (ntrials, N, T)
                  ):
         # Natural parameters for p(x_t|v_t)
         ntrials, N, T = Y.shape # Only T is different from self.Y.shape
@@ -286,7 +287,7 @@ class LDS(GenerativeModel):
 
         # print(samples.shape)
         firing_rates = self.link_fn(C[None, ...] @ samples + self.d[:, None]) # (n_mc_z, n_mc, ntrials, N, T)
-        first = self.lik.LL(firing_rates, Y) # (ntrials,)
+        first = self.lik.LL(firing_rates, Y, CD_mask) # (ntrials,)
         # print(first.shape)
 
         ## Second term of LL p(z_{1:T})
@@ -369,11 +370,13 @@ class Noise(Module, abc.ABC):
     def __init__(self) -> None:
         super().__init__()
 
-    def general_LL(self, dist, y):
+    def general_LL(self, dist, y, CD_mask=None):
         # y.shape = (ntrials, N, T)
         log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
 
         avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
+        if CD_mask is not None:
+            avg_log_prob = avg_log_prob * CD_mask
         total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
 
         return total_log_prob
@@ -393,25 +396,25 @@ class Negative_binomial_noise(Noise):
         return dists.transform_to(dists.constraints.greater_than_eq(0))(
             self._total_count)
     
-    def LL(self, rates, y) -> Tensor:
+    def LL(self, rates, y, CD_mask=None) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = NegativeBinomial(total_count=self.total_count[None, None, None, :, None], logits=rates)
-        return self.general_LL(dist, y)
+        return self.general_LL(dist, y, CD_mask)
         
 class Poisson_noise(Noise):
     def __init__(self) -> None:
         super().__init__()
         
-    def LL(self, rates, y) -> Tensor:
+    def LL(self, rates, y, CD_mask=None) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = Poisson(rates + 1e-6) # TODO: is this a good idea? (adding small number to avoid log(0))
-        return self.general_LL(dist, y)
+        return self.general_LL(dist, y, CD_mask)
 
 class Gaussian_noise(Noise):
     def __init__(self, sigma: float) -> None:
@@ -422,13 +425,13 @@ class Gaussian_noise(Noise):
     def sigma(self):
         return torch.exp(self.log_sigma)
     
-    def LL(self, rates, y) -> Tensor:
+    def LL(self, rates, y, CD_mask=None) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = Normal(rates, self.sigma)
-        return self.general_LL(dist, y)
+        return self.general_LL(dist, y, CD_mask)
 
 class MultiHeadNetwork(Module):
     def __init__(self, input_size, shared_layer_sizes, head_layer_sizes, head_names):
@@ -474,7 +477,7 @@ class MyLSTMModel(torch.nn.Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -507,6 +510,7 @@ class RecognitionModel(Module):
         self.preprocessor = preprocessor
         self.gen_model_fixed = gen_model_fixed # False if the generative model is also being trained
 
+        self.CD_keep_prob = CD_keep_prob # Probability for Coordinated Dropout
         # For debugging
         self.dWs = []
         self.dRs = []
@@ -696,6 +700,15 @@ class RecognitionModel(Module):
         log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
         return -log_prob.mean(dim=0) # (ntrials,)
 
+    def get_CD_mask(self, trials, N, T):
+        mask = torch.bernoulli(torch.full((trials, N, T), self.CD_keep_prob)).to(device)
+        return mask
+
+    def CD(self, y, mask):
+        if self.CD_keep_prob == 1:
+            return y
+        else:
+            return y * mask / self.CD_keep_prob
 
     def fit(self, data: DataLoader, train_params_recognition):
         lrate = train_params_recognition['lrate']
@@ -748,14 +761,20 @@ class RecognitionModel(Module):
                     batch_weight = 1
                     # NN pseudo observations
                     # y = y.transpose(-1, 0) # (ntrials, N, batch_size)
-                    pseudo_obs = self.get_x_tilde(y, only_x_tilde=False)
+                    CD_mask = self.get_CD_mask(*y.shape)
+                    pseudo_obs = self.get_x_tilde(self.CD(y, CD_mask), only_x_tilde=False)
                     x_tilde = pseudo_obs['x_tilde'] # (ntrials, x_dim, batch_size)
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials, pseudo_obs) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     if self.cov_change or not self.gen_model_fixed:
                         _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
-                    loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v)
+
+                    if self.CD_keep_prob == 1:
+                        CD_mask_complement = None
+                    else:
+                        CD_mask_complement = 1 - CD_mask
+                    loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement)
                     loss *= -1 # negative LL
 
                     if accumulate_gradient:
@@ -810,14 +829,14 @@ class RecognitionModel(Module):
             if train_params_recognition['save_every'] is not None and i % train_params_recognition['save_every'] == 0:
                 dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))
 
-    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None):
+    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None):
         # y is (ntrials, N, batch_size)
         # x_hat is (n_mc_z, ntrials, x_dim, batch_size)
 
         # mus_smooth are the samples from the posterior through matheron sampling
         mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, n_mc_z, ntrials, b), (T, n_mc_z, ntrials, b), (T-1, n_mc_z, ntrials, b)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
-        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False) # (ntrials,) # TODO: batching
+        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement) # (ntrials,) # TODO: batching
         if v is not None:
             v_LL = self.preprocessor.log_lik(mus_smooth.permute(1,2,3,0), v)
         else:

@@ -14,6 +14,7 @@ from preprocessor import Preprocessor
 from utils import general_kalman_covariance, general_kalman_means
 from enum import Enum
 import dill
+from sklearn.metrics import r2_score
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -477,7 +478,8 @@ class MyLSTMModel(torch.nn.Module):
         return out
 
 class RecognitionModel(Module):
-    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.) -> None:
+    def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.,
+                 Y_test: Tensor = None, v_test: np.ndarray = None) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -511,6 +513,14 @@ class RecognitionModel(Module):
         self.gen_model_fixed = gen_model_fixed # False if the generative model is also being trained
 
         self.CD_keep_prob = CD_keep_prob # Probability for Coordinated Dropout
+
+        self.Y_test = None
+        if Y_test is not None:
+            self.Y_test = Y_test.to(device)
+        self.v_test = None
+        if v_test is not None:
+            self.v_test = v_test
+
         # For debugging
         self.dWs = []
         self.dRs = []
@@ -735,6 +745,7 @@ class RecognitionModel(Module):
         self.y_LL_vals = []
         self.prior_LL_vals = []
         self.v_LL_vals = []
+        self.r2x_smooth, self.r2y_smooth, self.r2_smooth, self.r2x_filt, self.r2y_filt, self.r2_filt = [], [], [], [], [], []
         if self.gen_model_fixed and not self.cov_change:
             _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
@@ -828,6 +839,17 @@ class RecognitionModel(Module):
                     print(print_str)
             if train_params_recognition['save_every'] is not None and i % train_params_recognition['save_every'] == 0:
                 dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))
+                if self.Y_test is not None:
+                    r2_smooth, r2_filt = self.test_r2(print_results=True)
+                    self.r2x_smooth.append(r2_smooth[0])
+                    self.r2y_smooth.append(r2_smooth[1])
+                    self.r2_smooth.append(r2_smooth[2])
+                    self.r2x_filt.append(r2_filt[0])
+                    self.r2y_filt.append(r2_filt[1])
+                    self.r2_filt.append(r2_filt[2])
+                    if self.r2_smooth[-1] == max(self.r2_smooth):
+                        dill.dump(self, open(train_params_recognition['save_name'] + '_best.pkl', 'wb'))
+        
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None):
         # y is (ntrials, N, batch_size)
@@ -868,6 +890,36 @@ class RecognitionModel(Module):
         z = z.squeeze(1) # (T_test, ntrials, b)
         return z.permute(1, 2, 0) # (ntrials, b, T_test)
     
+    def test_r2(self, test_y: Tensor = None, print_results=True):
+        assert self.preprocessor is not None
+        assert self.v_test is not None
+
+        if test_y is None:
+            if self.Y_test is None:
+                raise ValueError('No test data provided')
+            else:
+                test_y = self.Y_test
+
+        assert (test_y.shape[0], test_y.shape[-1]) == (self.v_test.shape[0], self.v_test.shape[-1])      
+
+        z_smooth = self.test_z(test_y).detach().cpu().numpy() # (ntrials, b, T_test)
+        z_filt = self.test_z(test_y, smoothing=False).detach().cpu().numpy() # (ntrials, b, T_test)
+
+        v_smooth = self.preprocessor.W.detach().cpu().numpy() @ z_smooth # (ntrials, v_dim, T_test)
+        v_filt = self.preprocessor.W.detach().cpu().numpy() @ z_filt # (ntrials, v_dim, T_test)
+
+        r2x_smooth = r2_score(self.v_test[:,0,:].flatten(), v_smooth[:,0,:].flatten())
+        r2y_smooth = r2_score(self.v_test[:,1,:].flatten(), v_smooth[:,1,:].flatten())
+        r2x_filt = r2_score(self.v_test[:,0,:].flatten(), v_filt[:,0,:].flatten())
+        r2y_filt = r2_score(self.v_test[:,1,:].flatten(), v_filt[:,1,:].flatten())
+        r2_smooth = (r2x_smooth + r2y_smooth)/2
+        r2_filt = (r2x_filt + r2y_filt)/2
+
+        if print_results:
+            print('R2 smooth: x = {:.4f}, y = {:.4f}, avg = {:.4f}'.format(r2x_smooth, r2y_smooth, r2_smooth))
+            print('R2 filt: x = {:.4f}, y = {:.4f}, avg = {:.4f}'.format(r2x_filt, r2y_filt, r2_filt))
+        return [r2x_smooth, r2y_smooth, r2_smooth], [r2x_filt, r2y_filt, r2_filt]
+
     def plot_LL(self):
         plt.plot(self.LLs)
         plt.xlabel('Step')

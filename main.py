@@ -609,10 +609,10 @@ class RecognitionModel(Module):
         
     def train_recognition_model(self, train_params_recognition):
         if self.preprocessor is None:
-            dataloader = DataLoader(self.gen_model.Y, batch_size=train_params_recognition['batch_size'])
+            dataloader = DataLoader(self.gen_model.Y, batch_size=train_params_recognition['batch_size'], shuffle=True)
         else:
             dataset = TensorDataset(self.gen_model.Y, self.preprocessor.v)
-            dataloader = DataLoader(dataset, batch_size=train_params_recognition['batch_size'])
+            dataloader = DataLoader(dataset, batch_size=train_params_recognition['batch_size'], shuffle=True)
 
         self.fit(dataloader, train_params_recognition)
     

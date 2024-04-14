@@ -36,7 +36,7 @@ class Preprocessor(Module):
             self.W = torch.nn.Parameter(torch.randn(self.v_dim, self.z_dim).to(device) / np.sqrt(self.z_dim))
         # self.mu0 = torch.nn.Parameter(torch.rand(self.z_dim).to(device))
         self.mu0 = torch.nn.Parameter(torch.zeros(self.z_dim).to(device))
-        self.Sigma0_half = torch.nn.Parameter(noise_scale * torch.eye(self.z_dim).to(device))
+        self.Sigma0_half = torch.nn.Parameter(noise_scale/100 * torch.eye(self.z_dim).to(device))
         # self.log_sigma_v = torch.nn.Parameter(torch.log(torch.abs(torch.randn(1).to(device))))
         if R_half is not None:
             self.R_half = torch.nn.Parameter(R_half.to(device))

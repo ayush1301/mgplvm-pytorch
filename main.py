@@ -322,9 +322,12 @@ class LDS(GenerativeModel):
         else:
             return first+second, first, second # p(y_{1:T}|z_{1:T}), p(z_{1:T})
     
-    def sample_z(self, n_mc: int, trials, prev_z=None): # Sample z from the prior of the LDS
+    def sample_z(self, n_mc: int, trials, prev_z=None, T=None): # Sample z from the prior of the LDS
         # prev_z is (n_mc, ntrials, b)
-        samples = torch.zeros(n_mc, trials, self.b, self.T).to(device)
+        if T is None:
+            T = self.T
+
+        samples = torch.zeros(n_mc, trials, self.b, T).to(device)
         start_t = 0
         if prev_z is None:
             # TODO: optimise cholesky?
@@ -332,7 +335,7 @@ class LDS(GenerativeModel):
             samples[..., 0] = z0
             start_t = 1
             prev_z = z0
-        for t in range(start_t, self.T):
+        for t in range(start_t, T):
             z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
             samples[..., t] = z_t
             prev_z = z_t
@@ -658,8 +661,8 @@ class RecognitionModel(Module):
         else:
             return {'x_tilde': x_tilde, 'delta_R': delta_R, 'delta_W': delta_W}
     
-    def sample_matheron_pert(self, n_mc: int, trials, pseudo_obs=None):
-        z_prior = self.gen_model.sample_z(n_mc, trials).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
+    def sample_matheron_pert(self, n_mc: int, trials, pseudo_obs=None, T=None):
+        z_prior = self.gen_model.sample_z(n_mc, trials, T=T).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
         W = self.gen_model_W(pseudo_obs)
         if len(W.shape) != 2:
             W = W.transpose(0, 1) # (ntrials, T, x_dim, b)
@@ -869,7 +872,7 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor, smoothing=True):
+    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0):
         # TODO batching
         # return posterior mean on test data
         
@@ -888,7 +891,22 @@ class RecognitionModel(Module):
         else:
             z = mus[0] # (T_test, 1, ntrials, b)
         z = z.squeeze(1) # (T_test, ntrials, b)
-        return z.permute(1, 2, 0) # (ntrials, b, T_test)
+        z = z.permute(1, 2, 0) # (ntrials, b, T_test)
+
+        # Sample from the posterior
+        if samples:
+            # n_mc_z is just samples
+            matheron_pert = self.sample_matheron_pert(n_mc=samples, trials=test_y.shape[0], pseudo_obs=pseudo_obs, T=test_y.shape[-1]) # (n_mc_z, ntrials, x_dim, T)
+            x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size)
+            mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs)
+            if smoothing:
+                z_samples = mus[1] # (T_test, n_mc_z, ntrials, b)
+            else:
+                z_samples = mus[0] # (T_test, n_mc_z, ntrials, b)
+            z_samples = z_samples.permute(1, 2, 3, 0) # (n_mc_z, ntrials, b, T_test)
+            return z, z_samples
+        else:    
+            return z
     
     def test_r2(self, test_y: Tensor = None, print_results=True):
         assert self.preprocessor is not None

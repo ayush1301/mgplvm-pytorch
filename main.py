@@ -874,7 +874,7 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0):
+    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1):
         # TODO batching
         # return posterior mean on test data
         
@@ -893,20 +893,31 @@ class RecognitionModel(Module):
         else:
             z = mus[0] # (T_test, 1, ntrials, b)
         z = z.squeeze(1) # (T_test, ntrials, b)
-        z = z.permute(1, 2, 0) # (ntrials, b, T_test)
+        z = z.permute(1, 2, 0).detach().cpu().numpy() # (ntrials, b, T_test)
 
         # Sample from the posterior
         if samples:
-            # n_mc_z is just samples
-            matheron_pert = self.sample_matheron_pert(n_mc=samples, trials=test_y.shape[0], pseudo_obs=pseudo_obs, T=test_y.shape[-1]) # (n_mc_z, ntrials, x_dim, T)
-            x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size)
-            mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs)
-            if smoothing:
-                z_samples = mus[1] # (T_test, n_mc_z, ntrials, b)
-            else:
-                z_samples = mus[0] # (T_test, n_mc_z, ntrials, b)
-            z_samples = z_samples.permute(1, 2, 3, 0) # (n_mc_z, ntrials, b, T_test)
-            return z, z_samples
+            if batch == -1:
+                batch = samples
+
+            ret_samples = []
+            while samples:
+                if batch > samples:
+                    batch = samples
+
+                # n_mc_z is just samples
+                matheron_pert = self.sample_matheron_pert(n_mc=batch, trials=test_y.shape[0], pseudo_obs=pseudo_obs, T=test_y.shape[-1]) # (n_mc_z, ntrials, x_dim, T)
+                x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size)
+                mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs)
+                if smoothing:
+                    z_samples = mus[1] # (T_test, n_mc_z, ntrials, b)
+                else:
+                    z_samples = mus[0] # (T_test, n_mc_z, ntrials, b)
+                z_samples = z_samples.permute(1, 2, 3, 0) # (n_mc_z, ntrials, b, T_test)
+                ret_samples.append(z_samples.detach().cpu().numpy())
+
+                samples -= batch
+            return z, np.vstack(ret_samples)
         else:    
             return z
     
@@ -922,8 +933,8 @@ class RecognitionModel(Module):
 
         assert (test_y.shape[0], test_y.shape[-1]) == (self.v_test.shape[0], self.v_test.shape[-1])      
 
-        z_smooth = self.test_z(test_y).detach().cpu().numpy() # (ntrials, b, T_test)
-        z_filt = self.test_z(test_y, smoothing=False).detach().cpu().numpy() # (ntrials, b, T_test)
+        z_smooth = self.test_z(test_y) # (ntrials, b, T_test)
+        z_filt = self.test_z(test_y, smoothing=False) # (ntrials, b, T_test)
 
         v_smooth = self.preprocessor.W.detach().cpu().numpy() @ z_smooth # (ntrials, v_dim, T_test)
         v_filt = self.preprocessor.W.detach().cpu().numpy() @ z_filt # (ntrials, v_dim, T_test)

@@ -787,7 +787,9 @@ class RecognitionModel(Module):
                     if self.CD_keep_prob == 1:
                         CD_mask_complement = None
                     else:
-                        CD_mask_complement = 1 - CD_mask
+                        # CD_mask_complement = 1 - CD_mask
+                        # aa2236 - changed to below temporarily
+                        CD_mask_complement = torch.ones_like(CD_mask).to(device)
                     loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement)
                     loss *= -1 # negative LL
 

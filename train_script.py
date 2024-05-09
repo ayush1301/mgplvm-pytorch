@@ -183,7 +183,7 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
 
     if load_rec_model is None:
         gen_model_fixed_flag = (gen_model_fixed is None)
-        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test)
+        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test, v_train=v_train)
 
     if train_params_rec is None:
         train_params = {'batch_size': 100, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10}
@@ -326,7 +326,10 @@ if __name__ == '__main__':
     # main('5k_10z_poisson_noCD', '5k_10z_poisson_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
     # main('5k_10z_poisson_noCD2', '5k_10z_poisson_noCD_rec2', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
     # main('5k_10z_NB_noCD', '5k_10z_NB_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-    main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
+    # main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec_trial', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
 
     z_path = None
     # main('5k_10z_notshifted', '5k_10z_notshifted_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, delay=0)

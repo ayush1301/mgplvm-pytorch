@@ -491,7 +491,7 @@ class MyLSTMModel(torch.nn.Module):
 
 class RecognitionModel(Module):
     def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.,
-                 Y_test: Tensor = None, v_test: np.ndarray = None) -> None:
+                 Y_test: Tensor = None, v_test: np.ndarray = None, v_train: np.ndarray = None) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -532,6 +532,8 @@ class RecognitionModel(Module):
         self.v_test = None
         if v_test is not None:
             self.v_test = v_test
+        if v_train is not None:
+            self.v_train = v_train
 
         # For debugging
         self.dWs = []
@@ -758,6 +760,7 @@ class RecognitionModel(Module):
         self.prior_LL_vals = []
         self.v_LL_vals = []
         self.r2x_smooth, self.r2y_smooth, self.r2_smooth, self.r2x_filt, self.r2y_filt, self.r2_filt = [], [], [], [], [], []
+        self.r2x_smooth_train, self.r2y_smooth_train, self.r2_smooth_train, self.r2x_filt_train, self.r2y_filt_train, self.r2_filt_train = [], [], [], [], [], []
         if self.gen_model_fixed and not self.cov_change:
             _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
@@ -854,7 +857,9 @@ class RecognitionModel(Module):
             if train_params_recognition['save_every'] is not None and i % train_params_recognition['save_every'] == 0:
                 dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))
                 if self.Y_test is not None:
+                    print('Test Results:')
                     r2_smooth, r2_filt = self.test_r2(print_results=True)
+                    print()
                     self.r2x_smooth.append(r2_smooth[0])
                     self.r2y_smooth.append(r2_smooth[1])
                     self.r2_smooth.append(r2_smooth[2])
@@ -863,6 +868,16 @@ class RecognitionModel(Module):
                     self.r2_filt.append(r2_filt[2])
                     if self.r2_smooth[-1] == max(self.r2_smooth):
                         dill.dump(self, open(train_params_recognition['save_name'] + '_best.pkl', 'wb'))
+                # Compute train r^2
+                print('Train Results')
+                r2_smooth, r2_filt = self.test_r2(test_y=self.gen_model.Y, test_v=self.v_train, print_results=True)
+                print()
+                self.r2x_smooth_train.append(r2_smooth[0])
+                self.r2y_smooth_train.append(r2_smooth[1])
+                self.r2_smooth_train.append(r2_smooth[2])
+                self.r2x_filt_train.append(r2_filt[0])
+                self.r2y_filt_train.append(r2_filt[1])
+                self.r2_filt_train.append(r2_filt[2])
         
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None):
@@ -930,9 +945,11 @@ class RecognitionModel(Module):
         else:    
             return z
     
-    def test_r2(self, test_y: Tensor = None, print_results=True):
+    def test_r2(self, test_y: Tensor = None, test_v: Tensor = None, print_results=True):
         assert self.preprocessor is not None
-        assert self.v_test is not None
+        if test_v is None:
+            assert self.v_test is not None
+            test_v = self.v_test
 
         if test_y is None:
             if self.Y_test is None:
@@ -940,7 +957,7 @@ class RecognitionModel(Module):
             else:
                 test_y = self.Y_test
 
-        assert (test_y.shape[0], test_y.shape[-1]) == (self.v_test.shape[0], self.v_test.shape[-1])      
+        assert (test_y.shape[0], test_y.shape[-1]) == (test_v.shape[0], test_v.shape[-1])      
 
         z_smooth = self.test_z(test_y) # (ntrials, b, T_test)
         z_filt = self.test_z(test_y, smoothing=False) # (ntrials, b, T_test)
@@ -948,10 +965,10 @@ class RecognitionModel(Module):
         v_smooth = self.preprocessor.W.detach().cpu().numpy() @ z_smooth # (ntrials, v_dim, T_test)
         v_filt = self.preprocessor.W.detach().cpu().numpy() @ z_filt # (ntrials, v_dim, T_test)
 
-        r2x_smooth = r2_score(self.v_test[:,0,:].flatten(), v_smooth[:,0,:].flatten())
-        r2y_smooth = r2_score(self.v_test[:,1,:].flatten(), v_smooth[:,1,:].flatten())
-        r2x_filt = r2_score(self.v_test[:,0,:].flatten(), v_filt[:,0,:].flatten())
-        r2y_filt = r2_score(self.v_test[:,1,:].flatten(), v_filt[:,1,:].flatten())
+        r2x_smooth = r2_score(test_v[:,0,:].flatten(), v_smooth[:,0,:].flatten())
+        r2y_smooth = r2_score(test_v[:,1,:].flatten(), v_smooth[:,1,:].flatten())
+        r2x_filt = r2_score(test_v[:,0,:].flatten(), v_filt[:,0,:].flatten())
+        r2y_filt = r2_score(test_v[:,1,:].flatten(), v_filt[:,1,:].flatten())
         r2_smooth = (r2x_smooth + r2y_smooth)/2
         r2_filt = (r2x_filt + r2y_filt)/2
 

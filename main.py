@@ -407,6 +407,12 @@ class Negative_binomial_noise(Noise):
         '''
         dist = NegativeBinomial(total_count=self.total_count[None, None, None, :, None], logits=rates)
         return self.general_LL(dist, y, CD_mask)
+    
+    def dist_mean(self, rates: Tensor):
+        # rates.shape = (n_mc, ntrials, N, T)
+        total_count = self.total_count.detach().cpu()
+        dist = NegativeBinomial(total_count=total_count[None, None, :, None], logits=rates)
+        return dist.mean
         
 class Poisson_noise(Noise):
     def __init__(self) -> None:
@@ -419,6 +425,9 @@ class Poisson_noise(Noise):
         '''
         dist = Poisson(rates + 1e-6) # TODO: is this a good idea? (adding small number to avoid log(0))
         return self.general_LL(dist, y, CD_mask)
+    
+    def dist_mean(self, rates: Tensor):
+        return rates
 
 class Gaussian_noise(Noise):
     def __init__(self, sigma: float) -> None:
@@ -956,3 +965,27 @@ class RecognitionModel(Module):
         plt.xlabel('Step')
         plt.ylabel('LL')
         plt.show()
+
+    def get_firing_rates(self, z_samps: np.ndarray, dt = 0.025):
+        # z_samps is (n_mc, ntrials, z_dim, T)
+        W = self.gen_model.W[0].detach().cpu()
+        C = self.gen_model.C.detach().cpu()
+        if len(C.shape) == 3: # For buggy identity C in some tests. Length should always be 3
+            C = C[0]
+        R = self.gen_model.R[0].detach().cpu()
+        d = self.gen_model.d.detach().cpu()
+        # print(W.shape, C.shape, R.shape, d.shape)
+        X = W @ z_samps
+        X += torch.linalg.cholesky(R) @ torch.randn(*X.shape)
+        # print(C.shape, 'C shape')
+        # print((C @ X ).shape, 'CX shape')
+        # print((C @ X + d[:, None]).shape, 'cx + d shape')
+        F_samps= self.gen_model.link_fn(C @ X + d[:, None])
+
+        F = self.gen_model.lik.dist_mean(F_samps) / dt
+        return F.mean(dim=0), F_samps, X
+
+    def co_smoothing(self, Y: Tensor, rates: Tensor):
+        dist = Poisson(rate=rates)
+        log_prob = dist.log_prob(Y)
+        return log_prob.mean(), log_prob

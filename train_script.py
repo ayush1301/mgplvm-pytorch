@@ -125,7 +125,7 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
         if x_dim is None:
             x_dim = Y_train.shape[1]
             model = LDS(z_train, Y_train, lik, link_fn=link_fn, A=A, B=B, mu0=mu0, Sigma0_half=Sigma0_half, trained_z=trained_z, fixed_d=False, x_dim=x_dim, single_sigma_x=False, full_R=full_R, analytical_init=True)
-            model.C.data = torch.eye(model.N).to(device)
+            model.C.data = torch.eye(model.N).unsqueeze(0).to(device)
             model.C.requires_grad = False
         else:
             model = LDS(z_train, Y_train, lik, link_fn=link_fn, A=A, B=B, mu0=mu0, Sigma0_half=Sigma0_half, trained_z=trained_z, fixed_d=False, x_dim=x_dim, single_sigma_x=False, full_R=full_R)

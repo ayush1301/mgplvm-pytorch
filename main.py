@@ -491,7 +491,7 @@ class MyLSTMModel(torch.nn.Module):
 
 class RecognitionModel(Module):
     def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.,
-                 Y_test: Tensor = None, v_test: np.ndarray = None, v_train: np.ndarray = None) -> None:
+                 Y_test: Tensor = None, v_test: np.ndarray = None, v_train: np.ndarray = None, held_out_neurons: np.ndarray = None) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -535,6 +535,16 @@ class RecognitionModel(Module):
         if v_train is not None:
             self.v_train = v_train
 
+        self.test_neurons = held_out_neurons # list of neuron indeces that are completely held out
+        self.train_neurons = None
+        if held_out_neurons is not None:
+            all_indices = set(range(self.gen_model.N))
+            held_out_neurons_set = set(held_out_neurons)
+            remaining_indices = np.array(sorted(list(all_indices - held_out_neurons_set)))
+            self.train_neurons = remaining_indices
+            # TODO: maybe assert here that len(train_neurons) == input size of the neural net
+            # TODO: assertion for CD?
+
         # For debugging
         self.dWs = []
         self.dRs = []
@@ -554,6 +564,10 @@ class RecognitionModel(Module):
             'print_deltas': False,
             'save_every': None,
             'save_name': None,
+            'train_co_smoothing_samps': 100,
+            'train_co_smoothing_samps_per_batch': 10,
+            'test_co_smoothing_samps': 100,
+            'test_co_smoothing_samps_per_batch': 100
         }
 
         for key, value in kwargs.items():
@@ -761,6 +775,7 @@ class RecognitionModel(Module):
         self.v_LL_vals = []
         self.r2x_smooth, self.r2y_smooth, self.r2_smooth, self.r2x_filt, self.r2y_filt, self.r2_filt = [], [], [], [], [], []
         self.r2x_smooth_train, self.r2y_smooth_train, self.r2_smooth_train, self.r2x_filt_train, self.r2y_filt_train, self.r2_filt_train = [], [], [], [], [], []
+        self.train_co_smoothing_vals, self.test_co_smoothing_vals = [], []
         if self.gen_model_fixed and not self.cov_change:
             _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
 
@@ -786,9 +801,14 @@ class RecognitionModel(Module):
                     # batch_weight = batch_trials / self.gen_model.ntrials
                     batch_weight = 1
                     # NN pseudo observations
-                    # y = y.transpose(-1, 0) # (ntrials, N, batch_size)
-                    CD_mask = self.get_CD_mask(*y.shape)
-                    pseudo_obs = self.get_x_tilde(self.CD(y, CD_mask), only_x_tilde=False)
+
+                    # aa2236 below only train y to be used
+                    if self.train_neurons is not None:
+                        train_y = y[:, self.train_neurons, :]
+                    else:
+                        train_y = y
+                    CD_mask = self.get_CD_mask(*train_y.shape)
+                    pseudo_obs = self.get_x_tilde(self.CD(train_y, CD_mask), only_x_tilde=False)
                     x_tilde = pseudo_obs['x_tilde'] # (ntrials, x_dim, batch_size)
                     # Matheron psuedo observations
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials, pseudo_obs) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
@@ -802,6 +822,7 @@ class RecognitionModel(Module):
                         # CD_mask_complement = 1 - CD_mask
                         # aa2236 - changed to below temporarily
                         CD_mask_complement = torch.ones_like(CD_mask).to(device)
+                    # aa2236 below the entire y is used since it is used to evaluate joint LL
                     loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement)
                     loss *= -1 # negative LL
 
@@ -858,7 +879,7 @@ class RecognitionModel(Module):
                 dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))
                 if self.Y_test is not None:
                     print('Test Results:')
-                    r2_smooth, r2_filt = self.test_r2(print_results=True)
+                    r2_smooth, r2_filt = self.test_r2(print_results=True, train_indices=self.train_neurons)
                     print()
                     self.r2x_smooth.append(r2_smooth[0])
                     self.r2y_smooth.append(r2_smooth[1])
@@ -870,7 +891,7 @@ class RecognitionModel(Module):
                         dill.dump(self, open(train_params_recognition['save_name'] + '_best.pkl', 'wb'))
                 # Compute train r^2
                 print('Train Results')
-                r2_smooth, r2_filt = self.test_r2(test_y=self.gen_model.Y, test_v=self.v_train, print_results=True)
+                r2_smooth, r2_filt = self.test_r2(test_y=self.gen_model.Y, test_v=self.v_train, print_results=True, train_indices=self.train_neurons)
                 print()
                 self.r2x_smooth_train.append(r2_smooth[0])
                 self.r2y_smooth_train.append(r2_smooth[1])
@@ -878,7 +899,22 @@ class RecognitionModel(Module):
                 self.r2x_filt_train.append(r2_filt[0])
                 self.r2y_filt_train.append(r2_filt[1])
                 self.r2_filt_train.append(r2_filt[2])
-        
+
+                if self.train_neurons is not None:
+                    # co smoothing in this case
+
+                    # train co smoothing
+                    print('Train Cosmoothing: ', end='')
+                    train_co_smoothing = self.complete_co_smoothing(test_y=self.gen_model.Y, smoothing=True, samples=train_params_recognition['train_co_smoothing_samps'], batch=train_params_recognition['train_co_smoothing_samps_per_batch'], train_indices=self.train_neurons, test_indices=self.test_neurons).item()
+                    print(train_co_smoothing)
+                    self.train_co_smoothing_vals.append(train_co_smoothing)
+
+                    if train_params_recognition['test_co_smoothing_samps'] > 0:
+                        print('Test Cosmoothing: ', end='')
+                        test_co_smoothing = self.complete_co_smoothing(test_y=self.Y_test, smoothing=True, samples=train_params_recognition['test_co_smoothing_samps'], batch=train_params_recognition['test_co_smoothing_samps_per_batch'], train_indices=self.train_neurons, test_indices=self.test_neurons).item()
+                        print(test_co_smoothing)
+                        self.test_co_smoothing_vals.append(test_co_smoothing)
+                    torch.cuda.empty_cache()
 
     def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None):
         # y is (ntrials, N, batch_size)
@@ -898,9 +934,12 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1):
+    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1, train_indices=None):
         # TODO batching
         # return posterior mean on test data
+
+        if train_indices is not None:
+            test_y = test_y[:, train_indices, :]
         
         # test_y is (ntrials, N, T_test)
         pseudo_obs = self.get_x_tilde(test_y, only_x_tilde=False) # (ntrials, x_dim, T_test)
@@ -945,7 +984,7 @@ class RecognitionModel(Module):
         else:    
             return z
     
-    def test_r2(self, test_y: Tensor = None, test_v: Tensor = None, print_results=True):
+    def test_r2(self, test_y: Tensor = None, test_v: Tensor = None, print_results=True, train_indices=None):
         assert self.preprocessor is not None
         if test_v is None:
             assert self.v_test is not None
@@ -959,8 +998,8 @@ class RecognitionModel(Module):
 
         assert (test_y.shape[0], test_y.shape[-1]) == (test_v.shape[0], test_v.shape[-1])      
 
-        z_smooth = self.test_z(test_y) # (ntrials, b, T_test)
-        z_filt = self.test_z(test_y, smoothing=False) # (ntrials, b, T_test)
+        z_smooth = self.test_z(test_y, train_indices=train_indices) # (ntrials, b, T_test)
+        z_filt = self.test_z(test_y, smoothing=False, train_indices=train_indices) # (ntrials, b, T_test)
 
         v_smooth = self.preprocessor.W.detach().cpu().numpy() @ z_smooth # (ntrials, v_dim, T_test)
         v_filt = self.preprocessor.W.detach().cpu().numpy() @ z_filt # (ntrials, v_dim, T_test)
@@ -1006,3 +1045,9 @@ class RecognitionModel(Module):
         dist = Poisson(rate=rates)
         log_prob = dist.log_prob(Y)
         return log_prob.mean(), log_prob
+    
+    def complete_co_smoothing(self, test_y, smoothing, samples, batch, train_indices, test_indices):
+        _, z_samps = self.test_z(test_y=test_y, smoothing=smoothing, samples=samples, batch=batch, train_indices=train_indices)
+        torch.cuda.empty_cache()
+        F = self.get_firing_rates(z_samps, dt=0.025)[0] # AA2236 TODO TODO TODO make dt general
+        return self.co_smoothing(test_y[:, test_indices, :], F[:, test_indices, :].to(device))[0]

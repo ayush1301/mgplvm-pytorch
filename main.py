@@ -266,7 +266,8 @@ class LDS(GenerativeModel):
                  Y, # (ntrials, N, T)
                  prev_z, # (ntrials, b) OR (n_mc_z, ntrials, b)
                  ret_only_joint=True,
-                 CD_mask = None # (ntrials, N, T)
+                 CD_mask = None, # (ntrials, N, T)
+                 CD_keep_prob = 1. # Probability of keeping a neuron
                  ):
         # Natural parameters for p(x_t|v_t)
         ntrials, N, T = Y.shape # Only T is different from self.Y.shape
@@ -288,7 +289,7 @@ class LDS(GenerativeModel):
 
         # print(samples.shape)
         firing_rates = self.link_fn(C[None, ...] @ samples + self.d[:, None]) # (n_mc_z, n_mc, ntrials, N, T)
-        first = self.lik.LL(firing_rates, Y, CD_mask) # (ntrials,)
+        first = self.lik.LL(firing_rates, Y, CD_mask, CD_keep_prob) # (ntrials,)
         # print(first.shape)
 
         ## Second term of LL p(z_{1:T})
@@ -374,13 +375,15 @@ class Noise(Module, abc.ABC):
     def __init__(self) -> None:
         super().__init__()
 
-    def general_LL(self, dist, y, CD_mask=None):
+    def general_LL(self, dist, y, CD_mask=None, CD_keep_prob=1.):
         # y.shape = (ntrials, N, T)
         log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
 
         avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
         if CD_mask is not None:
             avg_log_prob = avg_log_prob * CD_mask
+            # New code to adjust the y LL
+            avg_log_prob = avg_log_prob * (1/(1-CD_keep_prob)) # Adjusting for the fact that we are only using a fraction of the neurons
         total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
 
         return total_log_prob
@@ -400,13 +403,13 @@ class Negative_binomial_noise(Noise):
         return dists.transform_to(dists.constraints.greater_than_eq(0))(
             self._total_count)
     
-    def LL(self, rates, y, CD_mask=None) -> Tensor:
+    def LL(self, rates, y, CD_mask=None, CD_keep_prob=1.) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = NegativeBinomial(total_count=self.total_count[None, None, None, :, None], logits=rates)
-        return self.general_LL(dist, y, CD_mask)
+        return self.general_LL(dist, y, CD_mask, CD_keep_prob)
     
     def dist_mean(self, rates: Tensor):
         # rates.shape = (n_mc, ntrials, N, T)
@@ -418,13 +421,13 @@ class Poisson_noise(Noise):
     def __init__(self) -> None:
         super().__init__()
         
-    def LL(self, rates, y, CD_mask=None) -> Tensor:
+    def LL(self, rates, y, CD_mask=None, CD_keep_prob=1.) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = Poisson(rates + 1e-6) # TODO: is this a good idea? (adding small number to avoid log(0))
-        return self.general_LL(dist, y, CD_mask)
+        return self.general_LL(dist, y, CD_mask, CD_keep_prob)
     
     def dist_mean(self, rates: Tensor):
         return rates
@@ -438,13 +441,13 @@ class Gaussian_noise(Noise):
     def sigma(self):
         return torch.exp(self.log_sigma)
     
-    def LL(self, rates, y, CD_mask=None) -> Tensor:
+    def LL(self, rates, y, CD_mask=None, CD_keep_prob=1.) -> Tensor:
         '''
         rates.shape = (n_mc_z, n_mc, ntrials, N, T)
         y.shape = (ntrials, N, T)
         '''
         dist = Normal(rates, self.sigma)
-        return self.general_LL(dist, y, CD_mask)
+        return self.general_LL(dist, y, CD_mask, CD_keep_prob)
 
 class MultiHeadNetwork(Module):
     def __init__(self, input_size, shared_layer_sizes, head_layer_sizes, head_names):
@@ -739,7 +742,19 @@ class RecognitionModel(Module):
         return -log_prob.mean(dim=0) # (ntrials,)
 
     def get_CD_mask(self, trials, N, T):
-        mask = torch.bernoulli(torch.full((trials, N, T), self.CD_keep_prob)).to(device)
+        # aa2236 below was the original code but here number of ones is not fixed
+        # mask = torch.bernoulli(torch.full((trials, N, T), self.CD_keep_prob)).to(device)
+
+        # aa2236 below is the new code where number of ones is fixed
+        total_elements = trials * N * T
+        num_ones = int(total_elements * self.CD_keep_prob)
+        # Create a 1D tensor with the required number of ones
+        tensor_1d = torch.cat((torch.ones(num_ones), torch.zeros(total_elements - num_ones)))
+        # Shuffle the 1D tensor to randomly distribute the ones
+        tensor_1d = tensor_1d[torch.randperm(total_elements)]
+        # Reshape the 1D tensor back into a 3D tensor
+        mask = tensor_1d.view(trials, N, T).to(device)
+
         return mask
 
     def CD(self, y, mask):
@@ -819,9 +834,9 @@ class RecognitionModel(Module):
                     if self.CD_keep_prob == 1:
                         CD_mask_complement = None
                     else:
-                        # CD_mask_complement = 1 - CD_mask
+                        CD_mask_complement = 1 - CD_mask
                         # aa2236 - changed to below temporarily
-                        CD_mask_complement = torch.ones_like(CD_mask).to(device)
+                        # CD_mask_complement = torch.ones_like(CD_mask).to(device)
                     # aa2236 below the entire y is used since it is used to evaluate joint LL
                     loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement)
                     loss *= -1 # negative LL
@@ -923,7 +938,7 @@ class RecognitionModel(Module):
         # mus_smooth are the samples from the posterior through matheron sampling
         mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, n_mc_z, ntrials, b), (T, n_mc_z, ntrials, b), (T-1, n_mc_z, ntrials, b)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
-        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement) # (ntrials,) # TODO: batching
+        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement, CD_keep_prob=self.CD_keep_prob) # (ntrials,) # TODO: batching
         if v is not None:
             v_LL = self.preprocessor.log_lik(mus_smooth.permute(1,2,3,0), v)
         else:

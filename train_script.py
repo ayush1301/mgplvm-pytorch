@@ -23,7 +23,7 @@ import dill
 def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', preprocessor=None, gen_load=False, neural_net=None, noise='Poisson', x_dim=None, train_params=None,
          train_params_rec=None, remove_mean=False, cov_change=False, full_R=False, gen_model_fixed:dict=None,
          data_len=5000, trial_len=100, train_len=4000, CD=1., load_rec_model=None, trained_z=True,
-         test_trial_len = 1000, delay=120):
+         test_trial_len = 1000, delay=120, generate_random_z=False, held_out_neurons=None):
     if dataset == '4g10':
         model_folder = '4g10datamodels'
     elif dataset == 'Doherty':
@@ -94,7 +94,10 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
         if z is not None:
             z_train = z[..., :train_len]
         else:
-            z = p.get_z_hat(v_train).detach().cpu()
+            if generate_random_z:
+                z = torch.randn((1, p.z_dim, train_len))
+            else:
+                z = p.get_z_hat(v_train).detach().cpu()
             z_train = z[..., :train_len]
         Y_test = Y[..., train_len:]
         # z_test = z[..., train_len:]
@@ -153,29 +156,40 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
     preprocessor.freeze_params()
     if gen_model_fixed is not None:
         if 'C' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('C requires grad')
             model.C.requires_grad = True
         if 'R' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('R requires grad')
             if model.full_R:
                 model.R_half.requires_grad = True
             else:
                 model.log_sigma_x.requires_grad = True
         if 'W' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('W requires grad')
             model.W.requires_grad = True
         if 'd' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('d requires grad')
             model.d.requires_grad = True
         if 'A' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('A requires grad')
             model.A.requires_grad = True
         if 'B' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('B requires grad')
             model.B.requires_grad = True
         if 'mu0' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('mu0 requires grad')
             model.mu0.requires_grad = True
         if 'Sigma0' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('Sigma0 requires grad')
             model.Sigma0_half.requires_grad = True
         if noise == 'NB':
+            print('lik requires grad')
             model.lik._total_count.requires_grad = True
         if 'pre_W' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('pre_W requires grad')
             preprocessor.W.requires_grad = True
         if 'pre_R' in gen_model_fixed or 'all' in gen_model_fixed:
+            print('pre_R requires grad')
             preprocessor.R_half.requires_grad = True
         
     torch.manual_seed(0)
@@ -183,7 +197,7 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
 
     if load_rec_model is None:
         gen_model_fixed_flag = (gen_model_fixed is None)
-        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test, v_train=v_train)
+        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test, v_train=v_train, held_out_neurons=held_out_neurons)
 
     if train_params_rec is None:
         train_params = {'batch_size': 100, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10}
@@ -327,11 +341,19 @@ if __name__ == '__main__':
     # main('5k_10z_poisson_noCD2', '5k_10z_poisson_noCD_rec2', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
     # main('5k_10z_NB_noCD', '5k_10z_NB_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
 
+    # AA2236 THIS WAS RUN ON BIDIRECTIONAL RNN by mistake!!!!!!!
     # main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-    main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec_trial', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
 
+    neural_net = MyLSTMModel(200,200,200, bidirectional=False)
+    # main('5k_10z_NB_CDnewLSTM', '5k_10z_NB_CDnewLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # main('5k_10z_NB_newLSTM', '5k_10z_NB_newLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 16, 'batch_mc_z': 16, 'accumulate_gradient': False, 'save_every': 10}
+    # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_oldCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # Below is with new CD (scaled yLL)
+    main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_newCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
 
     z_path = None
+    # AA2236 Below were done with bidirectional RNN I think
     # main('5k_10z_notshifted', '5k_10z_notshifted_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, delay=0)
     # main('5k_10z_notshifted_noCD', '5k_10z_notshifted_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', delay=0)
     # main('5k_10z_notshifted_poisson', '5k_10z_notshifted_poisson_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, CD=0.8, delay=0)
@@ -361,3 +383,33 @@ if __name__ == '__main__':
     # train_params_rec = {'batch_size': 50, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
     # neural_net = MyLSTMModel(162, 200, 162, bidirectional=False)
     # main('first_10ms', 'first_10ms_rec_online', z_path=z_path, datapath=datapath, gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+
+    # # Doherty but without preprocess init
+    # # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # train_params = {'batch_size': 50, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # fake_v = torch.randn((1,2,2)).to(device)
+    # p = Preprocessor(v=fake_v, z_dim=10, noise_scale=0.1)
+    # datapath = None
+    # z_path = None
+    # gen_model_fixed = {'all': True}
+    # neural_net = MyLSTMModel(180,200,200, bidirectional=False)
+
+    # np.random.seed(0)
+    # indices = np.random.choice(200, 20, replace=False)
+    # print(indices)
+    # # main('no_init', 'no_init_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
+
+    # train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-2, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # # main('no_init2', 'no_init2_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
+
+    # train_params = {'batch_size': 25, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
+    # z_path = 'new_params/z_hat_20min_smooth.npy'
+    # # main('NB_co', 'NB_co_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+    
+    # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 0}
+    # main('NB_co_long', 'NB_co_long_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)

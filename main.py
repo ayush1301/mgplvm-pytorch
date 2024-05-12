@@ -1037,7 +1037,7 @@ class RecognitionModel(Module):
         plt.ylabel('LL')
         plt.show()
 
-    def get_firing_rates(self, z_samps: np.ndarray, dt = 0.025):
+    def get_firing_rates(self, z_samps: np.ndarray):
         # z_samps is (n_mc, ntrials, z_dim, T)
         W = self.gen_model.W[0].detach().cpu()
         C = self.gen_model.C.detach().cpu()
@@ -1053,7 +1053,7 @@ class RecognitionModel(Module):
         # print((C @ X + d[:, None]).shape, 'cx + d shape')
         F_samps= self.gen_model.link_fn(C @ X + d[:, None])
 
-        F = self.gen_model.lik.dist_mean(F_samps) / dt
+        F = self.gen_model.lik.dist_mean(F_samps)
         return F.mean(dim=0), F_samps, X
 
     def co_smoothing(self, Y: Tensor, rates: Tensor):
@@ -1064,5 +1064,5 @@ class RecognitionModel(Module):
     def complete_co_smoothing(self, test_y, smoothing, samples, batch, train_indices, test_indices):
         _, z_samps = self.test_z(test_y=test_y, smoothing=smoothing, samples=samples, batch=batch, train_indices=train_indices)
         torch.cuda.empty_cache()
-        F = self.get_firing_rates(z_samps, dt=0.025)[0] # AA2236 TODO TODO TODO make dt general
+        F = self.get_firing_rates(z_samps)[0]
         return self.co_smoothing(test_y[:, test_indices, :], F[:, test_indices, :].to(device))[0]

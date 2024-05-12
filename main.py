@@ -986,7 +986,7 @@ class RecognitionModel(Module):
                 # n_mc_z is just samples
                 matheron_pert = self.sample_matheron_pert(n_mc=batch, trials=test_y.shape[0], pseudo_obs=pseudo_obs, T=test_y.shape[-1]) # (n_mc_z, ntrials, x_dim, T)
                 x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size)
-                mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs)
+                mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs, smoothing=smoothing)
                 if smoothing:
                     z_samples = mus[1] # (T_test, n_mc_z, ntrials, b)
                 else:

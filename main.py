@@ -379,7 +379,16 @@ class Noise(Module, abc.ABC):
         # y.shape = (ntrials, N, T)
         log_prob = dist.log_prob(y[None, None, ...]) # (n_mc_z, n_mc, ntrials, N, T)
 
-        avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
+        # avg_log_prob = torch.logsumexp(log_prob, dim=(0,1)) - np.log(log_prob.shape[0] * log_prob.shape[1]) # (ntrials, N, T)
+        # if CD_mask is not None:
+        #     avg_log_prob = avg_log_prob * CD_mask
+        #     # New code to adjust the y LL
+        #     avg_log_prob = avg_log_prob * (1/(1-CD_keep_prob)) # Adjusting for the fact that we are only using a fraction of the neurons
+        # total_log_prob = torch.sum(avg_log_prob, dim=(-1, -2))
+
+        # Trying correct LL
+        avg_log_prob = torch.logsumexp(log_prob, dim=(1)) - np.log(log_prob.shape[1]) # (n_mc_z, ntrials, N, T)
+        avg_log_prob = avg_log_prob.mean(dim=0) # (ntrials, N, T)
         if CD_mask is not None:
             avg_log_prob = avg_log_prob * CD_mask
             # New code to adjust the y LL

@@ -844,6 +844,10 @@ class RecognitionModel(Module):
                         CD_mask_complement = None
                     else:
                         CD_mask_complement = 1 - CD_mask
+                        if self.train_neurons is not None:
+                            _CD_mask_complement = torch.ones_like(y).to(device)
+                            _CD_mask_complement[:, self.train_neurons, :] = CD_mask_complement
+                            CD_mask_complement = _CD_mask_complement
                         # aa2236 - changed to below temporarily
                         # CD_mask_complement = torch.ones_like(CD_mask).to(device)
                     # aa2236 below the entire y is used since it is used to evaluate joint LL
@@ -947,7 +951,13 @@ class RecognitionModel(Module):
         # mus_smooth are the samples from the posterior through matheron sampling
         mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, n_mc_z, ntrials, b), (T, n_mc_z, ntrials, b), (T-1, n_mc_z, ntrials, b)
         entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
-        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement, CD_keep_prob=self.CD_keep_prob) # (ntrials,) # TODO: batching
+        if self.train_neurons is None:
+            CD_keep_prob = self.CD_keep_prob
+        else:
+            total_train_times = y.shape[0] * y.shape[-1] * len(self.train_neurons)
+            total_test_times = y.shape[0] * y.shape[-1] * len(self.test_neurons)
+            CD_keep_prob = (self.CD_keep_prob * total_train_times) / (total_train_times + total_test_times)
+        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement, CD_keep_prob=CD_keep_prob) # (ntrials,) # TODO: batching
         if v is not None:
             v_LL = self.preprocessor.log_lik(mus_smooth.permute(1,2,3,0), v)
         else:

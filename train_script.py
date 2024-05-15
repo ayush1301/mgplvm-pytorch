@@ -23,7 +23,7 @@ import dill
 def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', preprocessor=None, gen_load=False, neural_net=None, noise='Poisson', x_dim=None, train_params=None,
          train_params_rec=None, remove_mean=False, cov_change=False, full_R=False, gen_model_fixed:dict=None,
          data_len=5000, trial_len=100, train_len=4000, CD=1., load_rec_model=None, trained_z=True,
-         test_trial_len = 1000, delay=120, generate_random_z=False, held_out_neurons=None):
+         test_trial_len = 1000, delay=120, generate_random_z=False, held_out_neurons=None, smoothing=True):
     if dataset == '4g10':
         model_folder = '4g10datamodels'
     elif dataset == 'Doherty':
@@ -197,7 +197,7 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
 
     if load_rec_model is None:
         gen_model_fixed_flag = (gen_model_fixed is None)
-        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test, v_train=v_train, held_out_neurons=held_out_neurons)
+        rec_model = RecognitionModel(model, rnn=True, neural_net=neural_net, zero_mean_x_tilde=remove_mean, cov_change=cov_change, gen_model_fixed=gen_model_fixed_flag, preprocessor=preprocessor, CD_keep_prob=CD, Y_test=Y_test, v_test=v_test, v_train=v_train, held_out_neurons=held_out_neurons,smoothing=smoothing)
 
     if train_params_rec is None:
         train_params = {'batch_size': 100, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10}
@@ -427,4 +427,13 @@ if __name__ == '__main__':
     # main('NB_co_long_bi', 'NB_co_long_bi_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
     # Retry with different likelihood
     # main('NB_co_long_bi_new', 'NB_co_long_bi_new_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-    main('NB_co_long_bi_new', 'NB_co_long_bi_newCD_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_newCD_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    
+    # neural_net = MyLSTMModel(180,180,200, bidirectional=False)
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_newCDfilt_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+
+
+    train_params = {'batch_size': 10, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10}
+    neural_net = MyLSTMModel(180,180,200, bidirectional=False)
+    main('trial', 'trial', data_len=2000, train_len=1000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, smoothing=False)

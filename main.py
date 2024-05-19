@@ -503,7 +503,7 @@ class MyLSTMModel(torch.nn.Module):
 
 class RecognitionModel(Module):
     def __init__(self, gen_model: LDS, hidden_layer_size: int = 100, neural_net=None, rnn=False, cov_change=False, zero_mean_x_tilde=False, preprocessor: Preprocessor = None, gen_model_fixed=True, CD_keep_prob=1.,
-                 Y_test: Tensor = None, v_test: np.ndarray = None, v_train: np.ndarray = None, held_out_neurons: np.ndarray = None) -> None:
+                 Y_test: Tensor = None, v_test: np.ndarray = None, v_train: np.ndarray = None, held_out_neurons: np.ndarray = None, smoothing=True) -> None:
         super(RecognitionModel, self).__init__()
         self.gen_model = gen_model
         # Define a 2 layer MLP with hidden_layer_size hidden units
@@ -556,6 +556,8 @@ class RecognitionModel(Module):
             self.train_neurons = remaining_indices
             # TODO: maybe assert here that len(train_neurons) == input size of the neural net
             # TODO: assertion for CD?
+
+        self.smoothing = smoothing # Whether training is in the smoothing setting
 
         # For debugging
         self.dWs = []
@@ -712,7 +714,7 @@ class RecognitionModel(Module):
         noise = torch.linalg.cholesky(R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
     
-    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True): # return all matrices independent of observations
+    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True, filter_entropy_terms=False): # return all matrices independent of observations
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
@@ -722,14 +724,14 @@ class RecognitionModel(Module):
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
         x_dim = self.gen_model.x_dim
-        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing)
+        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing, filter_entropy_terms)
     
-    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None, smoothing=True):
+    def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None, smoothing=True, filter_entropy_K=None):
         A = self.gen_model.A.squeeze(0) # (b, b)
         W = self.gen_model_W(pseudo_obs)
         b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
-        return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs, smoothing)
+        return general_kalman_means(A, W, b, mu0, x_hat, Ks, Cs, smoothing, entropy_K=filter_entropy_K)
     
 
     def entropy(self, samples, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol):
@@ -743,12 +745,75 @@ class RecognitionModel(Module):
         mus_tilde = torch.zeros(batch_size, n_mc_z, n_trials, b).to(device) # mu_tilde[t] = E[z_t|z_{t+1:T}, y_{1:T}]
         mus_tilde[-1] = mus_filt[-1] # (n_mc_z, ntrials, b)
         t_values = torch.arange(batch_size - 2, -1, -1)
+        # TODO THESE ARE THE SAME AS SAMPLES!!!!!
         mus_tilde[t_values] = mus_filt[t_values] + (Cs[:, None, ...][t_values] @ (samples[t_values + 1] - mus_diffused[t_values])[..., None]).squeeze(-1)
         
         dist = MultivariateNormal(mus_tilde, scale_tril=Sigmas_tilde_chol[:, None, ...])
         # dist = MultivariateNormal(mus_tilde, covariance_matrix=Sigmas_tilde[:, None, None, ...])
         log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
         return -log_prob.mean(dim=0) # (ntrials,)
+    
+    def entropy_filt(self, samples, filter_entropy_terms, mus_bar, x_tilde):
+        # # samples is (batch_size, n_mc_z, ntrials, b)
+        # # mus_bar is (batch_size-1, n_mc_z, ntrials, b)
+        # # x_tilde is (ntrials, x_dim, batch_size)
+        # Sigma_bar = filter_entropy_terms['Sigma_bar'] # (ntrials, b, b)
+        # Sigma_filt_first = filter_entropy_terms['Sigma_filt_first'] # (ntrials, b, b)
+
+        # # W = self.gen_model.W.squeeze(0) # (N, b)
+        # # A = self.gen_model.A.squeeze(0) # (b, b)
+        # # z_diffused = (A @ samples[:-1][..., None]) # (batch_size-1, n_mc_z, ntrials, b, 1)
+        # # K = filter_entropy_terms['K'].squeeze(0)
+        # # mus_bar = (z_diffused + K @ (x_tilde[..., 1:].permute(-1,0,1)[:, None, ...] - (W @ z_diffused).squeeze(-1))[..., None]).squeeze(-1) # (batch_size-1, n_mc_z, ntrials, b)
+        
+
+        # # TODO Stupid way to calculate entropy
+        # first_dist = MultivariateNormal(samples[0], covariance_matrix=Sigma_filt_first)
+        # first_entropy = -first_dist.log_prob(samples[0]).mean(dim=0) # (ntrials,)
+
+        # dist = MultivariateNormal(samples[1:,...], covariance_matrix=Sigma_bar)
+        # # dist = MultivariateNormal(mus_bar, covariance_matrix=Sigma_bar)
+        # log_prob = dist.log_prob(samples[1:,...]).sum(dim=0) # (n_mc_z-1, ntrials)
+
+        # return -log_prob.mean(dim=0) + first_entropy # (ntrials,)
+
+        Sigma_filt = filter_entropy_terms['Sigma_filt'] # (batch_size, ntrials, b, b)
+        # print(Sigma_filt.shape, samples.shape)
+        dist = MultivariateNormal(samples, covariance_matrix=Sigma_filt[:, None, ...])
+        log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
+        return -log_prob.mean(dim=0) # (ntrials,)
+    
+        # # Sample from this distribution
+        # # samples = torch.zeros(samples.shape).to(device) # TODO remove this dependency
+        # batch_size, n_mc_z, n_trials, b = samples.shape
+        # Q = self.gen_model.Q.squeeze(0) # (b, b)
+        # W = self.gen_model.W.squeeze(0) # (N, b)
+        # R = self.gen_model.R.squeeze(0) # (N, N)
+        # K = Q @ W.T @ torch.linalg.inv(W @ Q @ W.T + R) # (b, N)
+        # Sigma = Q - K @ W @ Q
+        # A = self.gen_model.A.squeeze(0) # (b, b)
+        # mu0 = self.gen_model.mu0.squeeze(0) # (b)
+        # Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
+
+        # K1 = Sigma0 @ W.T @ torch.linalg.inv(W @ Sigma0 @ W.T + R)
+        # mu1 = mu0 + (K1 @ (x_tilde[..., 0] - W @ mu0)[..., None]).squeeze(-1)
+        # Sigma1 = Sigma0 - K1 @ W @ Sigma0
+        # samples = []
+        # samples.append(mu1 + (torch.linalg.cholesky(Sigma1) @ torch.randn(n_mc_z, n_trials, b).to(device)[..., None]).squeeze(-1))
+        # for t in range(1, batch_size):
+        #     z_diffused = (A @ samples[-1][..., None]) # (n_mc_z, ntrials, b, 1)
+        #     # samples.append(A @ samples[t-1] + (Q @ torch.randn(samples[t].shape).to(device)[..., None]).squeeze(-1))
+        #     mu = (z_diffused + K @ (x_tilde[..., t-1][None, ...] - (W @ z_diffused).squeeze(-1))[..., None]).squeeze(-1)
+        #     samples.append(mu + (torch.linalg.cholesky(Sigma) @ torch.randn(n_mc_z, n_trials, b).to(device)[..., None]).squeeze(-1))
+        # samples = torch.stack(samples, dim=0)
+        # first_dist = MultivariateNormal(samples[0], covariance_matrix=Sigma1)
+        # first_entropy = -first_dist.log_prob(samples[0]).mean(dim=0) # (ntrials,)
+        # dist = MultivariateNormal(samples[1:,...], covariance_matrix=Sigma)
+        # log_prob = dist.log_prob(samples[1:,...]).sum(dim=0) # (n_mc_z-1, ntrials)
+
+        # return -log_prob.mean(dim=0) + first_entropy, samples
+
+
 
     def get_CD_mask(self, trials, N, T):
         # aa2236 below was the original code but here number of ones is not fixed
@@ -801,7 +866,15 @@ class RecognitionModel(Module):
         self.r2x_smooth_train, self.r2y_smooth_train, self.r2_smooth_train, self.r2x_filt_train, self.r2y_filt_train, self.r2_filt_train = [], [], [], [], [], []
         self.train_co_smoothing_vals, self.test_co_smoothing_vals = [], []
         if self.gen_model_fixed and not self.cov_change:
-            _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+            if self.smoothing:
+                _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+                filter_entropy_relevant_terms = None
+            else:
+                Sigmas_filt, _, Ks, K, Sigma_bar = self.kalman_covariance(get_sigma_tilde=True, smoothing=False, filter_entropy_terms=True)
+                filter_entropy_relevant_terms = {'Sigma_filt_first': Sigmas_filt[0], 'K': K, 'Sigma_bar': Sigma_bar, 'Sigma_filt': Sigmas_filt}
+                # Sigmas_filt = None # Free up memory
+                Cs = None
+                Sigmas_tilde_chol = None
 
         for i in range(max_steps):
             loss_vals = []
@@ -838,7 +911,15 @@ class RecognitionModel(Module):
                     matheron_pert = self.sample_matheron_pert(batch_mc_z, batch_trials, pseudo_obs) # (n_mc_z, ntrials, x_dim, T) # TODO: do I need to do this every time?
                     x_hat = x_tilde[None, ...] - matheron_pert[..., :x_tilde.shape[-1]] # (n_mc_z, ntrials, x_dim, batch_size) TODO: how to deal with batch_size?
                     if self.cov_change or not self.gen_model_fixed:
-                        _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+                        if self.smoothing:
+                            _ , _, Ks, Cs, Sigmas_tilde_chol = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b), (T, b, b)
+                            filter_entropy_relevant_terms = None
+                        else:
+                            Sigmas_filt, _, Ks, K, Sigma_bar = self.kalman_covariance(get_sigma_tilde=True, pseudo_obs=pseudo_obs, smoothing=False, filter_entropy_terms=True)
+                            filter_entropy_relevant_terms = {'Sigma_filt_first': Sigmas_filt[0], 'K': K, 'Sigma_bar': Sigma_bar, 'Sigma_filt': Sigmas_filt}
+                            # Sigmas_filt = None # Free up memory
+                            Cs = None
+                            Sigmas_tilde_chol = None
 
                     if self.CD_keep_prob == 1:
                         CD_mask_complement = None
@@ -851,7 +932,7 @@ class RecognitionModel(Module):
                         # aa2236 - changed to below temporarily
                         # CD_mask_complement = torch.ones_like(CD_mask).to(device)
                     # aa2236 below the entire y is used since it is used to evaluate joint LL
-                    loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement)
+                    loss, entropy, y_LL, prior_LL, v_LL = self.LL(n_mc_x, x_hat, y, Ks, Cs, Sigmas_tilde_chol, pseudo_obs=pseudo_obs, v=v, CD_mask_complement=CD_mask_complement, filter_entropy_terms=filter_entropy_relevant_terms, x_tilde=x_tilde)
                     loss *= -1 # negative LL
 
                     if accumulate_gradient:
@@ -944,22 +1025,31 @@ class RecognitionModel(Module):
                         self.test_co_smoothing_vals.append(test_co_smoothing)
                     torch.cuda.empty_cache()
 
-    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None):
+    def LL(self, n_mc_x: int, x_hat:Tensor, y: Tensor, Ks: Tensor, Cs: Tensor, Sigmas_tilde_chol: Tensor, pseudo_obs=None, v=None, CD_mask_complement: Tensor=None, filter_entropy_terms=None, x_tilde=None):
         # y is (ntrials, N, batch_size)
         # x_hat is (n_mc_z, ntrials, x_dim, batch_size)
+        if self.smoothing:
+            mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs, smoothing=self.smoothing)
+            mus_filt, mus_smooth, mus_diffused = mus
+            posterior_samps = mus_smooth
+            entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
+        else:
+            mus = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs, smoothing=self.smoothing, filter_entropy_K=filter_entropy_terms['K'])
+            mus_filt, _ , mus_bar = mus
+            posterior_samps = mus_filt
+            # entropy, posterior_samps = self.entropy_filt(mus_filt, filter_entropy_terms, mus_bar, x_tilde=x_tilde) # (ntrials,)
+            entropy = self.entropy_filt(mus_filt, filter_entropy_terms, mus_bar, x_tilde=x_tilde) # (ntrials,)
 
-        # mus_smooth are the samples from the posterior through matheron sampling
-        mus_filt, mus_smooth, mus_diffused = self.kalman_means(x_hat, Ks, Cs, pseudo_obs=pseudo_obs) # (T, n_mc_z, ntrials, b), (T, n_mc_z, ntrials, b), (T-1, n_mc_z, ntrials, b)
-        entropy = self.entropy(mus_smooth, mus_filt, mus_diffused, Cs, Sigmas_tilde_chol) # (ntrials,)
+
         if self.train_neurons is None:
             CD_keep_prob = self.CD_keep_prob
         else:
             total_train_times = y.shape[0] * y.shape[-1] * len(self.train_neurons)
             total_test_times = y.shape[0] * y.shape[-1] * len(self.test_neurons)
             CD_keep_prob = (self.CD_keep_prob * total_train_times) / (total_train_times + total_test_times)
-        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, mus_smooth.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement, CD_keep_prob=CD_keep_prob) # (ntrials,) # TODO: batching
+        joint_LL, y_LL, prior_LL = self.gen_model.joint_LL(n_mc_x, posterior_samps.permute(1,2,3,0), y, prev_z=None, ret_only_joint=False, CD_mask=CD_mask_complement, CD_keep_prob=CD_keep_prob) # (ntrials,) # TODO: batching
         if v is not None:
-            v_LL = self.preprocessor.log_lik(mus_smooth.permute(1,2,3,0), v)
+            v_LL = self.preprocessor.log_lik(posterior_samps.permute(1,2,3,0), v)
         else:
             v_LL = torch.zeros(joint_LL.shape).to(device)
         return (entropy + joint_LL + v_LL).sum(), entropy.sum(), y_LL.sum(), prior_LL.sum(), v_LL.sum()

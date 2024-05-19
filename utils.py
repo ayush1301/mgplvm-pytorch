@@ -23,7 +23,7 @@ def make_symmetric(m: Tensor):
 def is_symmetric(matrix):
     return torch.all(matrix == matrix.transpose(-1, -2))
 
-def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True): # return all matrices independent of observations
+def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True, filter_entropy_terms=False): # return all matrices independent of observations
     W_var, R_var, Q_var, A_var = True, True, True, True
     if len(W.shape) == 2:
         W = W[None, None, ...] # T, ntrials, x_dim, b
@@ -98,9 +98,16 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
         else:
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs) # (T, b, b), (T-1, b, b), (T, b, x_dim), (T-1, b, b)
     else:
-        return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks) # (T, b, b), (T-1, b, b), (T, b, x_dim)
+        if not filter_entropy_terms:
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks) # (T, b, b), (T-1, b, b), (T, b, x_dim)
+        else:
+            # Need K = QW^T (R + WQW^T)^-1, Sigma_bar = Q - K W Q
+            S = torch.linalg.cholesky(R[0] + W[0] @ Q[0] @ W[0].transpose(-1, -2)) # (ntrials, x_dim, x_dim)
+            K = chol_inv(S, Q[0] @ W[0].transpose(-1, -2), left=False) # (ntrials, b, x_dim)
+            Sigma_bar = make_symmetric(Q[0] - K @ W[0] @ Q[0]) # (ntrials, b, b)
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), K, Sigma_bar # (T, b, b), (T-1, b, b), (T, b, x_dim), (ntrials, b, x_dim), (ntrials, b, b)
     
-def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, smoothing=True):
+def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, smoothing=True, entropy_K=None):
     # Ks.shape = (T, ntrials, b, x_dim)
     # Cs.shape = (T-1, ntrials, b, b)
 
@@ -120,6 +127,7 @@ def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, sm
     # Kalman filter
     mus_filt = [] # mu_filt[t] = mu_t^t # (batch_size, n_mc_z, ntrials, b)
     mus_diffused = [] # mu_diffused[t] = mu_{t+1}^t # (batch_size-1, n_mc_z, ntrials, b)
+    mus_bar = [] # mu_bar[t] = p(z_t|z_{t-1}, y_t) # (batch_size-1, n_mc_z, ntrials, b) Only used if entropy_K is not None
 
     # Sub in the first time step
     mus_filt.append(mu0 + (Ks[0] @ ( _xhat[0][..., None] - W[0]@ mu0[..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
@@ -131,6 +139,8 @@ def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, sm
         # populate mus_diffused[t-1] and mus_filt[t]
         mus_diffused.append((_A @ mus_filt[t-1][..., None]).squeeze(-1)) # (n_mc_z, ntrials, b)
         mus_filt.append(mus_diffused[t-1] + (Ks[t] @ (_xhat[t][..., None] - _W @ mus_diffused[t-1][..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
+        if entropy_K is not None:
+            mus_bar.append(mus_diffused[t-1] + (entropy_K @ (_xhat[t][..., None] - _W @ mus_diffused[t-1][..., None])).squeeze(-1)) # (n_mc_z, ntrials, b)
 
     # Kalman smoother
     if smoothing:
@@ -141,7 +151,10 @@ def general_kalman_means(A, W, b, mu0, x_hat: Tensor, Ks: Tensor, Cs: Tensor, sm
             
         return torch.stack(mus_filt), mus_smooth, torch.stack(mus_diffused) # (batch_size, n_mc_z, ntrials, b), (batch_size, n_mc_z, ntrials, b), (batch_size-1, n_mc_z, ntrials, b)
     else:
-        return torch.stack(mus_filt), torch.stack(mus_diffused)
+        if entropy_K is not None:
+            return torch.stack(mus_filt), torch.stack(mus_diffused), torch.stack(mus_bar)
+        else:
+            return torch.stack(mus_filt), torch.stack(mus_diffused)
     
 # returns (U @ U^T)^-1 @ x left=True, x @ (U @ U^T)^-1 left=False
 def chol_inv(u, x, left=True):

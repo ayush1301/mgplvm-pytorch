@@ -55,24 +55,34 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
         # Y_test = torch.Tensor(Y_test)
         # print(Y_test.shape, 'y_test shape')
     elif dataset == 'Doherty':
-        data = pickle.load(open('data/Doherty_example.pickled', 'rb')) # load example data
-        binsize = 25 # binsize in ms
-        start = 0
-        timepoints = np.arange(start, data_len+start) #subsample ~40 seconds of data so things will run somewhat quicker
-        # print(data['Y'].shape)
-        fit_data = {'Y': data['Y'][..., timepoints], 'locs': data['locs'][timepoints, :], 'targets': data['targets'][timepoints, :], 'binsize': binsize}
-        Y = fit_data['Y'] # these are the actual recordings and is the input to our model
-        targets = fit_data['targets'] # these are the target locations
-        locs = fit_data['locs'] # these are the hand positions
+        if datapath is None:
+            data = pickle.load(open('data/Doherty_example.pickled', 'rb')) # load example data
+            binsize = 25 # binsize in ms
+            start = 0
+            timepoints = np.arange(start, data_len+start) #subsample ~40 seconds of data so things will run somewhat quicker
+            # print(data['Y'].shape)
+            fit_data = {'Y': data['Y'][..., timepoints], 'locs': data['locs'][timepoints, :], 'targets': data['targets'][timepoints, :], 'binsize': binsize}
+            Y = fit_data['Y'] # these are the actual recordings and is the input to our model
+            targets = fit_data['targets'] # these are the target locations
+            locs = fit_data['locs'] # these are the hand positions
 
-        Y = Y[:, np.mean(Y,axis = (0, 2))/0.025 > 0, :] #subsample highly active neurons so things will run a bit quicker
-        # print(Y.shape)
-        ntrials, n, T = Y.shape # Y should have shape: [number of trials (here 1) x neurons x time points]
+            Y = Y[:, np.mean(Y,axis = (0, 2))/0.025 > 0, :] #subsample highly active neurons so things will run a bit quicker
+            # print(Y.shape)
+            ntrials, n, T = Y.shape # Y should have shape: [number of trials (here 1) x neurons x time points]
 
-        ts = np.arange(Y.shape[-1])*fit_data['binsize'] # measured in ms
-        cs = CubicSpline(ts, locs) # fit cubic spline to behavior
-        vels = cs(ts+delay, 1) # velocity (first derivative)
-        v = Tensor(vels.T[None, ...])
+            ts = np.arange(Y.shape[-1])*fit_data['binsize'] # measured in ms
+            cs = CubicSpline(ts, locs) # fit cubic spline to behavior
+            vels = cs(ts+delay, 1) # velocity (first derivative)
+            v = Tensor(vels.T[None, ...])
+        else:
+            data = pickle.load(open(datapath, 'rb'))
+            start = 0
+            timepoints = np.arange(start, data_len)
+            Y = data['Y'][..., timepoints]
+            vels = data['vels'][timepoints]
+            v = Tensor(vels.T[None, ...])
+            print('v shape loaded', v.shape)
+            print('Y shape loaded', Y.shape)
         
         def convert_to_trials(_Y, _z=None, _v=None, t=None):
             assert _Y.shape[-1] % t == 0
@@ -475,3 +485,10 @@ if __name__ == '__main__':
     neural_net = MyLSTMModel(180,180,2, bidirectional=True)
     # main('2z', '2z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
     # main('2z_zv', '2z_zv_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, load_v_to_z=True, generate_random_z=True)
+
+    p = pickle.load(open('new_params/5k_15z.pkl', 'rb'))
+    # print(p.Sigma0)
+    p.freeze_params()
+    z_path = None
+    neural_net = MyLSTMModel(180,180,15, bidirectional=True)
+    main('15z', '15z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=15, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)

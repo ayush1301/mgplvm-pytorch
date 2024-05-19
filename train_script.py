@@ -23,7 +23,8 @@ import dill
 def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', preprocessor=None, gen_load=False, neural_net=None, noise='Poisson', x_dim=None, train_params=None,
          train_params_rec=None, remove_mean=False, cov_change=False, full_R=False, gen_model_fixed:dict=None,
          data_len=5000, trial_len=100, train_len=4000, CD=1., load_rec_model=None, trained_z=True,
-         test_trial_len = 1000, delay=120, generate_random_z=False, held_out_neurons=None):
+         test_trial_len = 1000, delay=120, generate_random_z=False, held_out_neurons=None,
+         load_v_to_z=False):
     if dataset == '4g10':
         model_folder = '4g10datamodels'
     elif dataset == 'Doherty':
@@ -100,6 +101,8 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
             else:
                 z = p.get_z_hat(v_train).detach().cpu()
             z_train = z[..., :train_len]
+        if load_v_to_z:
+            z_train = v_train
         Y_test = Y[..., train_len:]
         # z_test = z[..., train_len:]
         v_test = v[..., train_len:]
@@ -134,6 +137,11 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
         else:
             model = LDS(z_train, Y_train, lik, link_fn=link_fn, A=A, B=B, mu0=mu0, Sigma0_half=Sigma0_half, trained_z=trained_z, fixed_d=False, x_dim=x_dim, single_sigma_x=False, full_R=full_R)
 
+        if load_v_to_z:
+            model.A.requires_grad = True
+            model.B.requires_grad = True
+            model.mu0.data = torch.zeros_like(model.mu0).to(device)
+            model.Sigma0_half.data = 0.001 * torch.eye(model.b)[None, ...].to(device)
         print(model.N, model.T, model.x_dim, model.b, model.ntrials)
 
         if train_params is None:
@@ -465,4 +473,5 @@ if __name__ == '__main__':
     p.freeze_params()
     z_path = None
     neural_net = MyLSTMModel(180,180,2, bidirectional=True)
-    main('2z', '2z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    # main('2z', '2z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    # main('2z_zv', '2z_zv_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, load_v_to_z=True, generate_random_z=True)

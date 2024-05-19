@@ -347,11 +347,14 @@ if __name__ == '__main__':
     neural_net = MyLSTMModel(200,200,200, bidirectional=False)
     # main('5k_10z_NB_CDnewLSTM', '5k_10z_NB_CDnewLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
     # main('5k_10z_NB_newLSTM', '5k_10z_NB_newLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 14, 'batch_mc_z': 14, 'accumulate_gradient': False, 'save_every': 10}
+    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 14, 'n_mc_z': 14, 'batch_mc_z': 14, 'accumulate_gradient': False, 'save_every': 10}
     # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_oldCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
     # Below is with new CD (scaled yLL)
     # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_newCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-    main('5k_10z_NB_newLSTM_oldCD', 'filt_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
+    # main('5k_10z_NB_newLSTM_oldCD', 'filt_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
+    neural_net = MyLSTMModel(200,200,300, bidirectional=False)
+    train_params = {'batch_size': 64, 'n_mc': 20, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    main('filt_high_xdim', 'filt_high_xdim_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=300, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
 
     z_path = None
     # AA2236 Below were done with bidirectional RNN I think

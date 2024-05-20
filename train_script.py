@@ -392,21 +392,21 @@ if __name__ == '__main__':
     # # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
     # # main('320NB_400t', '320NB_400t_CD_ABp_rec', data_len=12800, train_len=12800, trial_len=400, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
 
-    # 4g10
-    p = pickle.load(open('4g10preprocess/10ms.pkl', 'rb'))
-    p.freeze_params()
-    train_params = {'batch_size': 200, 'n_mc': 25, 'lrate': 5e-3, 'max_steps': 1001, 'step_size': 2000, 'StepLR': True, 'batch_type': BATCHING.TRIALS, 'save_every': 50}
-    train_params_rec = {'batch_size': 50, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
-    gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
-    neural_net = MyLSTMModel(162, 200, 162)
-    z_path = '4g10preprocess/z_hat_10ms.npy'
-    datapath = 'data_10ms.npz'
+    # # 4g10
+    # p = pickle.load(open('4g10preprocess/10ms.pkl', 'rb'))
+    # p.freeze_params()
+    # train_params = {'batch_size': 200, 'n_mc': 25, 'lrate': 5e-3, 'max_steps': 1001, 'step_size': 2000, 'StepLR': True, 'batch_type': BATCHING.TRIALS, 'save_every': 50}
+    # train_params_rec = {'batch_size': 50, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
+    # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
+    # neural_net = MyLSTMModel(162, 200, 162)
+    # z_path = '4g10preprocess/z_hat_10ms.npy'
+    # datapath = 'data_10ms.npz'
 
-    # main('first_10ms', 'first_10ms_rec', z_path=z_path, datapath=datapath, gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+    # # main('first_10ms', 'first_10ms_rec', z_path=z_path, datapath=datapath, gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
 
-    train_params_rec = {'batch_size': 50, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
-    neural_net = MyLSTMModel(162, 200, 162, bidirectional=False)
-    main('first_10ms', 'first_10ms_rec_online', z_path=z_path, datapath=datapath, gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+    # train_params_rec = {'batch_size': 50, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
+    # neural_net = MyLSTMModel(162, 200, 162, bidirectional=False)
+    # main('first_10ms', 'first_10ms_rec_online', z_path=z_path, datapath=datapath, gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
 
     # Doherty but without preprocess init
     # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
@@ -519,4 +519,17 @@ if __name__ == '__main__':
     train_params = {'batch_size': 10, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
     neural_net = MyLSTMModel(180,180,200, bidirectional=False)
-    main('trial', 'trial', data_len=2000, train_len=1000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, smoothing=False)
+    # main('trial', 'trial', data_len=2000, train_len=1000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, smoothing=False)
+
+    # Remember no delay for below
+    p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
+    # print(p.Sigma0)
+    # print(torch.diag(p.Q))
+    # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
+    p.freeze_params()
+    z_path = None
+    datapath = 'processed_data_64.pickled'
+    neural_net = MyLSTMModel(180,180,10, bidirectional=False)
+    train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
+    main('64ms_10z', '64ms_10z_filt_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)

@@ -934,13 +934,13 @@ class RecognitionModel(Module):
                     # train co smoothing
                     print('Train Cosmoothing: ', end='')
                     train_co_smoothing = self.complete_co_smoothing(test_y=self.gen_model.Y, smoothing=True, samples=train_params_recognition['train_co_smoothing_samps'], batch=train_params_recognition['train_co_smoothing_samps_per_batch'], train_indices=self.train_neurons, test_indices=self.test_neurons).item()
-                    print(train_co_smoothing)
+                    print(train_co_smoothing, 'bits/spike')
                     self.train_co_smoothing_vals.append(train_co_smoothing)
 
                     if train_params_recognition['test_co_smoothing_samps'] > 0:
                         print('Test Cosmoothing: ', end='')
                         test_co_smoothing = self.complete_co_smoothing(test_y=self.Y_test, smoothing=True, samples=train_params_recognition['test_co_smoothing_samps'], batch=train_params_recognition['test_co_smoothing_samps_per_batch'], train_indices=self.train_neurons, test_indices=self.test_neurons).item()
-                        print(test_co_smoothing)
+                        print(test_co_smoothing, 'bits/spike')
                         self.test_co_smoothing_vals.append(test_co_smoothing)
                     torch.cuda.empty_cache()
 
@@ -1078,7 +1078,14 @@ class RecognitionModel(Module):
     def co_smoothing(self, Y: Tensor, rates: Tensor):
         dist = Poisson(rate=rates)
         log_prob = dist.log_prob(Y)
-        return log_prob.mean(), log_prob
+        # return log_prob.mean(), log_prob
+        muF = torch.mean(Y, axis=(0, 2))
+        distF = Poisson(rate=muF[None, :, None])
+        log_probF = distF.log_prob(Y)
+        nsp = torch.sum(Y)
+        cosmoothing = 1/(nsp*np.log(2)) * (log_prob.sum() - log_probF.sum())
+        return cosmoothing, log_prob
+
     
     def complete_co_smoothing(self, test_y, smoothing, samples, batch, train_indices, test_indices):
         _, z_samps = self.test_z(test_y=test_y, smoothing=smoothing, samples=samples, batch=batch, train_indices=train_indices)

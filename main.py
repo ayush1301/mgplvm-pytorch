@@ -754,34 +754,34 @@ class RecognitionModel(Module):
         return -log_prob.mean(dim=0) # (ntrials,)
     
     def entropy_filt(self, samples, filter_entropy_terms, mus_bar, x_tilde):
-        # # samples is (batch_size, n_mc_z, ntrials, b)
-        # # mus_bar is (batch_size-1, n_mc_z, ntrials, b)
-        # # x_tilde is (ntrials, x_dim, batch_size)
-        # Sigma_bar = filter_entropy_terms['Sigma_bar'] # (ntrials, b, b)
-        # Sigma_filt_first = filter_entropy_terms['Sigma_filt_first'] # (ntrials, b, b)
+        # samples is (batch_size, n_mc_z, ntrials, b)
+        # mus_bar is (batch_size-1, n_mc_z, ntrials, b)
+        # x_tilde is (ntrials, x_dim, batch_size)
+        Sigma_bar = filter_entropy_terms['Sigma_bar'] # (ntrials, b, b)
+        Sigma_filt_first = filter_entropy_terms['Sigma_filt_first'] # (ntrials, b, b)
 
-        # # W = self.gen_model.W.squeeze(0) # (N, b)
-        # # A = self.gen_model.A.squeeze(0) # (b, b)
-        # # z_diffused = (A @ samples[:-1][..., None]) # (batch_size-1, n_mc_z, ntrials, b, 1)
-        # # K = filter_entropy_terms['K'].squeeze(0)
-        # # mus_bar = (z_diffused + K @ (x_tilde[..., 1:].permute(-1,0,1)[:, None, ...] - (W @ z_diffused).squeeze(-1))[..., None]).squeeze(-1) # (batch_size-1, n_mc_z, ntrials, b)
+        # W = self.gen_model.W.squeeze(0) # (N, b)
+        # A = self.gen_model.A.squeeze(0) # (b, b)
+        # z_diffused = (A @ samples[:-1][..., None]) # (batch_size-1, n_mc_z, ntrials, b, 1)
+        # K = filter_entropy_terms['K'].squeeze(0)
+        # mus_bar = (z_diffused + K @ (x_tilde[..., 1:].permute(-1,0,1)[:, None, ...] - (W @ z_diffused).squeeze(-1))[..., None]).squeeze(-1) # (batch_size-1, n_mc_z, ntrials, b)
         
 
-        # # TODO Stupid way to calculate entropy
-        # first_dist = MultivariateNormal(samples[0], covariance_matrix=Sigma_filt_first)
-        # first_entropy = -first_dist.log_prob(samples[0]).mean(dim=0) # (ntrials,)
+        # TODO Stupid way to calculate entropy
+        first_dist = MultivariateNormal(samples[0], covariance_matrix=Sigma_filt_first)
+        first_entropy = -first_dist.log_prob(samples[0]).mean(dim=0) # (ntrials,)
 
         # dist = MultivariateNormal(samples[1:,...], covariance_matrix=Sigma_bar)
-        # # dist = MultivariateNormal(mus_bar, covariance_matrix=Sigma_bar)
-        # log_prob = dist.log_prob(samples[1:,...]).sum(dim=0) # (n_mc_z-1, ntrials)
+        dist = MultivariateNormal(mus_bar, covariance_matrix=Sigma_bar)
+        log_prob = dist.log_prob(samples[1:,...]).sum(dim=0) # (n_mc_z-1, ntrials)
 
-        # return -log_prob.mean(dim=0) + first_entropy # (ntrials,)
+        return -log_prob.mean(dim=0) + first_entropy # (ntrials,)
 
-        Sigma_filt = filter_entropy_terms['Sigma_filt'] # (batch_size, ntrials, b, b)
-        # print(Sigma_filt.shape, samples.shape)
-        dist = MultivariateNormal(samples, covariance_matrix=Sigma_filt[:, None, ...])
-        log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
-        return -log_prob.mean(dim=0) # (ntrials,)
+        # Sigma_filt = filter_entropy_terms['Sigma_filt'] # (batch_size, ntrials, b, b)
+        # # print(Sigma_filt.shape, samples.shape)
+        # dist = MultivariateNormal(samples, covariance_matrix=Sigma_filt[:, None, ...])
+        # log_prob = dist.log_prob(samples).sum(dim=0) # (n_mc_z, ntrials)
+        # return -log_prob.mean(dim=0) # (ntrials,)
     
         # # Sample from this distribution
         # # samples = torch.zeros(samples.shape).to(device) # TODO remove this dependency
@@ -996,7 +996,7 @@ class RecognitionModel(Module):
                     self.r2x_filt.append(r2_filt[0])
                     self.r2y_filt.append(r2_filt[1])
                     self.r2_filt.append(r2_filt[2])
-                    if self.r2_smooth[-1] == max(self.r2_smooth):
+                    if (self.smoothing and self.r2_smooth[-1] == max(self.r2_smooth)) or (not self.smoothing and self.r2_filt[-1] == max(self.r2_filt)):
                         dill.dump(self, open(train_params_recognition['save_name'] + '_best.pkl', 'wb'))
                 # Compute train r^2
                 print('Train Results')

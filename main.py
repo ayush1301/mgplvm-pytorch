@@ -715,7 +715,7 @@ class RecognitionModel(Module):
         noise = torch.linalg.cholesky(R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
         return (pertubation + noise).squeeze(-1).transpose(-1, -2) # (n_mc, ntrials, x_dim, T)
     
-    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True, filter_entropy_terms=False): # return all matrices independent of observations
+    def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True, filter_entropy_terms=False, return_covs=False): # return all matrices independent of observations
         if T is None:
             T = self.gen_model.T
         A = self.gen_model.A.squeeze(0) # (b, b)
@@ -725,7 +725,7 @@ class RecognitionModel(Module):
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
         x_dim = self.gen_model.x_dim
-        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing, filter_entropy_terms)
+        return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing, filter_entropy_terms, ret_smoothing_cov=return_covs)
     
     def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None, smoothing=True, filter_entropy_K=None):
         A = self.gen_model.A.squeeze(0) # (b, b)
@@ -1059,7 +1059,7 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1, train_indices=None):
+    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1, train_indices=None, return_covs=False):
         # TODO batching
         # return posterior mean on test data
 
@@ -1069,12 +1069,16 @@ class RecognitionModel(Module):
         # test_y is (ntrials, N, T_test)
         pseudo_obs = self.get_x_tilde(test_y, only_x_tilde=False) # (ntrials, x_dim, T_test)
         x_tilde = pseudo_obs['x_tilde']
-        Covs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs, smoothing=smoothing)
+        Covs = self.kalman_covariance(T=test_y.shape[-1], pseudo_obs=pseudo_obs, smoothing=smoothing, return_covs=return_covs)
         Ks = Covs[2]
         if smoothing:
             Cs = Covs[3]
+            if return_covs:
+                SIGMA = Covs[-1]
         else:
             Cs = None
+            if return_covs:
+                SIGMA = Covs[0]
         mus = self.kalman_means(x_tilde[None, ...], Ks, Cs, pseudo_obs=pseudo_obs, smoothing=smoothing) 
         if smoothing:
             z = mus[1] # (T_test, 1, ntrials, b)
@@ -1105,9 +1109,15 @@ class RecognitionModel(Module):
                 ret_samples.append(z_samples.detach().cpu().numpy())
 
                 samples -= batch
-            return z, np.vstack(ret_samples)
-        else:    
-            return z
+            if return_covs:
+                return z, np.vstack(ret_samples), SIGMA
+            else:
+                return z, np.vstack(ret_samples)
+        else:
+            if return_covs:
+                return z, SIGMA
+            else:    
+                return z
     
     def test_r2(self, test_y: Tensor = None, test_v: Tensor = None, print_results=True, train_indices=None):
         assert self.preprocessor is not None

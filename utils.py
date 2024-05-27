@@ -23,7 +23,7 @@ def make_symmetric(m: Tensor):
 def is_symmetric(matrix):
     return torch.all(matrix == matrix.transpose(-1, -2))
 
-def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True): # return all matrices independent of observations
+def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_tilde=False, smoothing=True, ret_smoothing_cov=False): # return all matrices independent of observations
     W_var, R_var, Q_var, A_var = True, True, True, True
     if len(W.shape) == 2:
         W = W[None, None, ...] # T, ntrials, x_dim, b
@@ -47,6 +47,8 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     Sigmas_diffused_chol = [] # Sigmas_diffused_chol[t] = Cholesky of Sigmas_diffused[t], shape = T - 1, b, b at end
     Sigmas_tilde = [torch.zeros(trials, b, b).to(device) for _ in range(T)] # Sigmas_tilde[t] = Cov of p(z_t|z_{t+1:T}, y_{1:T})
     Ks = [] # Ks[t] = K_t
+    if ret_smoothing_cov:
+        Sigmas_smooth = [] # Sigmas_smooth[t] = Cov of p(z_t|y_{1:T})
 
     # print if Q, R, Sigma0 are not symmetric
     if not (is_symmetric(Q) and is_symmetric(R) and is_symmetric(Sigma0)):
@@ -81,6 +83,8 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
     if smoothing:
         Sigmas_tilde[-1] = Sigmas_filt[-1] # (b, b)
         Cs = [torch.zeros(trials, b, b).to(device) for _ in range(T - 1)] # Cs[t] = C_t
+        if ret_smoothing_cov:
+            Sigmas_smooth.append(Sigmas_filt[-1])
         for t in range(T - 2, -1, -1):
             _A = A[t-1] if A_var else A[0]
             _W = W[t] if W_var else W[0]
@@ -89,10 +93,15 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             S = Sigmas_diffused_chol[t] # (ntrials, b, b)
             Cs[t] = chol_inv(S, Sigmas_filt[t] @ _A.transpose(-1,-2), left=False) # (ntrials, b, b)
             Sigmas_tilde[t] = make_symmetric(Sigmas_filt[t] - Cs[t] @ Sigmas_diffused[t] @ Cs[t].transpose(-1,-2))
+            if ret_smoothing_cov:
+                Sigmas_smooth.append(Sigmas_filt[t] + Cs[t] @ (Sigmas_smooth[-1] - Sigmas_diffused[t]) @ Cs[t].transpose(-1,-2))
         Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (ntrials, b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
-
+        
+        if ret_smoothing_cov: # return everything when ret_smoothing_cov is True
+            return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs), Sigmas_tilde_chol, torch.stack(Sigmas_smooth)
+        
         if get_sigma_tilde:
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), torch.stack(Cs), Sigmas_tilde_chol
         else:

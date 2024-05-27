@@ -113,7 +113,9 @@ if __name__ == '__main__':
     # main(20, train_params, suffix='5k_20z_new', dataset='Doherty', data_len=5000, trials=1)
     # main(2, train_params, suffix='5k_2z_better_init', dataset='Doherty', data_len=5000, trials=1)
 
-    main(10, train_params, suffix='64ms_10z_2k', dataset='Doherty', data_len=2000, trials=1, data_path='processed_data_64.pickled')
+    # main(10, train_params, suffix='64ms_10z_2k', dataset='Doherty', data_len=2000, trials=1, data_path='processed_data_64.pickled')
+    main(10, train_params, suffix='64ms_10z_2k_20160630', dataset='Doherty', data_len=2000, trials=1, data_path='20160630_processed_data_64.pickled')
+
 
 
 

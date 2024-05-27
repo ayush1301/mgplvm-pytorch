@@ -627,7 +627,8 @@ class RecognitionModel(Module):
                 # Assume implementation of full_R where diag elements are exponentiated
                 delta_R = pseudo_obs['delta_R'] # (batch_size, ntrials, x_dim)
                 if delta_R.shape[-1] == self.gen_model.x_dim:
-                    delta_R = torch.diag_embed(torch.exp(delta_R)) # (batch_size, ntrials, x_dim, x_dim)
+                    # delta_R = torch.diag_embed(torch.exp(delta_R)) # (batch_size, ntrials, x_dim, x_dim)
+                    delta_R = torch.diag_embed(delta_R)
                 elif delta_R.shape[-1] == self.gen_model.x_dim * (self.gen_model.x_dim + 1) / 2:
                     delta_R_reshaped = torch.zeros(delta_R.shape[0], delta_R.shape[1], self.gen_model.x_dim, self.gen_model.x_dim).to(device)
                     rows, cols = torch.tril_indices(self.gen_model.x_dim, self.gen_model.x_dim)

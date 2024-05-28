@@ -79,7 +79,8 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
             start = 0
             timepoints = np.arange(start, data_len)
             Y = data['Y'][..., timepoints]
-            Y = Y[:, np.load('active_neurons.npy'), :]
+            if datapath == 'processed_data_64.pickled':
+                Y = Y[:, np.load('active_neurons.npy'), :]
             vels = data['vels'][timepoints]
             v = Tensor(vels.T[None, ...])
             print('v shape loaded', v.shape)
@@ -110,7 +111,7 @@ def main(gen_model_name, rec_model_name, z_path, datapath, dataset='4g10', prepr
                 print(p)
                 z = torch.randn((1, p.z_dim, train_len))
             else:
-                z = p.get_z_hat(v_train).detach().cpu()
+                z = p.get_z_hat(v_train, smoothing=smoothing).detach().cpu()
             z_train = z[..., :train_len]
         if load_v_to_z:
             z_train = v_train
@@ -289,293 +290,308 @@ class MultiHeadRNN(Module):
             ret[key] = fc(out)
         return ret
 
-# if __name__ == '__main__':
-#     # # Doherty
-#     # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
-#     # p.freeze_params()
-#     # train_params = {'batch_size': None, 'n_mc': 100, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50}
-#     # train_params_rec = {'batch_size': None, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 501, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 50}
-#     # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
-#     # neural_net = None
-#     # z_path = 'new_params/z_hat_1t_shifted.npy'
-#     # datapath = None
-#     # # main('shifted', 'shifted_rec', z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-
-#     # p = pickle.load(open('new_params/9k1t.pkl', 'rb'))
-#     # p.freeze_params()
-#     # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # train_params_rec = {'batch_size': 8, 'step_size': 30, 'lrate': 1e-3, 'max_steps': 501, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     # # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
-#     # neural_net = dill.load(open('bgpfa_models/9k_rec.pkl', 'rb')).neural_net.cpu()
-#     # z_path = 'new_params/z_hat_9k1t_shifted.npy'
-#     # # main('9k', '9k_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-
-#     # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
-#     # p.freeze_params()
-#     # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
-#     # z_path = 'new_params/z_hat_20min_smooth.npy'
-#     # # main('9ktrain_5kpre', '9ktrain_5kpre_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-#     # # # Wrong CD, I zeroed out Ys, not the gradients
-#     # # main('9ktrain_5kpre', '9ktrain_5kpre_rec_CD', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, CD=0.8)
-#     # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-#     # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_CD_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_new_CD_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('320NB', '320NB_CD_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('320NB', '320NB_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-#     # # z_path = 'new_params/z_hat_20min_filter.npy'
-#     # # main('320NB_filt', '320NB_filt_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-
-#     # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True, 'A': True, 'B': True}
-#     # z_path = 'new_params/z_hat_20min_smooth.npy'
-#     # # main('320NB', '320NB_CD_AB_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True, 'A': True, 'B': True, 'pre_W': True, 'pre_R': True}
-#     # # main('320NB', '320NB_CD_ABp_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, load_rec_model='320NB_CD_AB_rec')
-    
-#     # # Not training A, C, W etc in recognition model. But A, B are trained in generative model
-#     # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 1e-2, 'max_steps': 501, 'step_size': 20, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # # main('gen_train', 'gen_train_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, trained_z=False)
-
-#     # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     # # neural_net = MyLSTMModel(200,100,200, bidirectional=False)
-#     # # main('320NB', '320NB_CD_ABp_smallrnn_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-
-
-#     # # try z_dim = 20
-#     # p = pickle.load(open('new_params/5k_20z.pkl', 'rb'))
-#     # gen_model_fixed = {'all': True}
-#     # neural_net = MyRNNModel(200, 200, 200)
-#     # z_path = 'new_params/z_hat_5k_20z.npy'
-#     # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     # # Exactly same as '5k_20z_rec'
-#     # # main('5k_20z', '5k_20z_rec_new', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-    
-#     # p = pickle.load(open('new_params/5k_30z.pkl', 'rb'))
-#     # z_path = 'new_params/z_hat_5k_30z.npy'
-#     # # main('5k_30z', '5k_30z_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-
-#     # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
-#     # z_path = 'new_params/z_hat_20min_smooth.npy'
-#     # # main('5k_10z', '5k_10z_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('5k_10z_poisson_noCD', '5k_10z_poisson_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-#     # # main('5k_10z_poisson_noCD2', '5k_10z_poisson_noCD_rec2', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-#     # # main('5k_10z_NB_noCD', '5k_10z_NB_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-
-#     # # AA2236 THIS WAS RUN ON BIDIRECTIONAL RNN by mistake!!!!!!!
-#     # # main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-
-#     # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
-#     # # main('5k_10z_NB_CDnewLSTM', '5k_10z_NB_CDnewLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('5k_10z_NB_newLSTM', '5k_10z_NB_newLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
-#     # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 14, 'n_mc_z': 14, 'batch_mc_z': 14, 'accumulate_gradient': False, 'save_every': 10}
-#     # # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_oldCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # Below is with new CD (scaled yLL)
-#     # # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_newCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-#     # # main('5k_10z_NB_newLSTM_oldCD', 'filt_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
-#     # neural_net = MyLSTMModel(200,200,300, bidirectional=False)
-#     # train_params = {'batch_size': 64, 'n_mc': 20, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # main('filt_high_xdim', 'filt_high_xdim_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=300, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
-
-#     # z_path = None
-#     # # AA2236 Below were done with bidirectional RNN I think
-#     # # main('5k_10z_notshifted', '5k_10z_notshifted_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, delay=0)
-#     # # main('5k_10z_notshifted_noCD', '5k_10z_notshifted_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', delay=0)
-#     # # main('5k_10z_notshifted_poisson', '5k_10z_notshifted_poisson_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, CD=0.8, delay=0)
-#     # # main('5k_10z_notshifted_poisson_noCD', '5k_10z_notshifted_poisson_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, delay=0)
-
-
-#     # # p_new = Preprocessor(p.v.copy(), z_dim=10, W)
-
-
-#     # # train_params = {'batch_size': 16, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # # train_params_rec = {'batch_size': 2, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     # # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
-#     # # main('320NB_400t', '320NB_400t_CD_ABp_rec', data_len=12800, train_len=12800, trial_len=400, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
-
-#     # # 4g10
-#     # p = pickle.load(open('4g10preprocess/10ms.pkl', 'rb'))
-#     # p.freeze_params()
-#     # train_params = {'batch_size': 200, 'n_mc': 25, 'lrate': 5e-3, 'max_steps': 1001, 'step_size': 2000, 'StepLR': True, 'batch_type': BATCHING.TRIALS, 'save_every': 50}
-#     # train_params_rec = {'batch_size': 50, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
-#     # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
-#     # neural_net = MyLSTMModel(162, 200, 162)
-#     # z_path = '4g10preprocess/z_hat_10ms.npy'
-#     # datapath = 'data_10ms.npz'
-
-#     # # main('first_10ms', 'first_10ms_rec', z_path=z_path, datapath=datapath, gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-
-#     # train_params_rec = {'batch_size': 50, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
-#     # neural_net = MyLSTMModel(162, 200, 162, bidirectional=False)
-#     # main('first_10ms', 'first_10ms_rec_online', z_path=z_path, datapath=datapath, gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
-
-#     # Doherty but without preprocess init
-#     # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     train_params = {'batch_size': 50, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     fake_v = torch.randn((1,2,2)).to(device)
-#     p = Preprocessor(v=fake_v, z_dim=10, noise_scale=0.1)
-#     datapath = None
-#     z_path = None
-#     gen_model_fixed = {'all': True}
-#     neural_net = MyLSTMModel(180,200,200, bidirectional=False)
-
-#     np.random.seed(0)
-#     indices = np.random.choice(200, 20, replace=False)
-#     print(indices)
-#     # main('no_init', 'no_init_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
-
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-2, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     # main('no_init2', 'no_init2_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
-#     train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
-#     neural_net = MyLSTMModel(180,200,200, bidirectional=True) # only below ran with bidirectional
-#     # main('no_init_long', 'no_init_long_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True, CD=0.8)
-
-
-#     # The next 2 were run with unidirectional LSTM
-#     train_params = {'batch_size': 25, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
-#     p = pickle.load(open('new_params/_1t.pkl', 'rb'))
-#     z_path = 'new_params/z_hat_20min_smooth.npy'
-#     # main('NB_co', 'NB_co_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-    
-#     train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 0}
-#     # main('NB_co_long', 'NB_co_long_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-
-
-
-#     train_params = {'batch_size': 25, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10}
-#     neural_net = MyLSTMModel(180,180,200, bidirectional=True)
-#     # main('NB_co_bi', 'NB_co_bi_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-#     # main('NB_co_bi_new', 'NB_co_bi_new_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-
-#     train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
-#     # main('NB_co_long_bi', 'NB_co_long_bi_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-#     # Retry with different likelihood
-#     # main('NB_co_long_bi_new', 'NB_co_long_bi_new_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
-#     # main('NB_co_long_bi_new', 'NB_co_long_bi_newCD_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-    
-#     train_params = {'batch_size': 64, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     neural_net = MyLSTMModel(180,180,10, bidirectional=True)
-#     # main('NB_co_long_bi_new_small_x', 'NB_co_long_bi_small_x_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-#     p = pickle.load(open('new_params/5k_20z.pkl', 'rb'))
-#     p.freeze_params()
-#     z_path = 'new_params/z_hat_5k_20z.npy'
-#     neural_net = MyLSTMModel(180,180,20, bidirectional=True)
-#     # main('20z', '20z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=20, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-#     p = pickle.load(open('new_params/5k_5z_new.pkl', 'rb'))
-#     p.freeze_params()
-#     z_path = None
-#     neural_net = MyLSTMModel(180,180,5, bidirectional=True)
-#     # main('5z', '5z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=5, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-
-#     p = pickle.load(open('new_params/5k_15z.pkl', 'rb'))
-#     # print(p.Sigma0)
-#     p.freeze_params()
-#     z_path = None
-#     neural_net = MyLSTMModel(180,180,15, bidirectional=True)
-#     # main('15z', '15z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=15, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-#     p = pickle.load(open('new_params/5k_2z.pkl', 'rb'))
-#     # print(p.Sigma0)
-#     p.freeze_params()
-#     z_path = None
-#     neural_net = MyLSTMModel(180,180,2, bidirectional=True)
-#     # main('2z', '2z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-#     # main('2z_zv', '2z_zv_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, load_v_to_z=True, generate_random_z=True)
-
-#     # p = pickle.load(open('new_params/5k_15z.pkl', 'rb'))
-#     # # print(p.Sigma0)
-#     # p.freeze_params()
-#     # z_path = None
-#     # neural_net = MyLSTMModel(180,180,15, bidirectional=True)
-#     # main('15z', '15z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=15, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-#     # Remember no delay for below
-#     p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
-#     # print(p.Sigma0)
-#     # print(torch.diag(p.Q))
-#     # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
-#     p.freeze_params()
-#     z_path = None
-#     datapath = 'processed_data_64.pickled'
-#     neural_net = MyLSTMModel(180,180,10, bidirectional=True)
-#     train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
-#     # main('64ms_10z', '64ms_10z_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
-
-#     # FILTERING CAN BE WRONG
-#     neural_net = MyLSTMModel(180,180,200, bidirectional=False)
-#     # neural_net = MyLSTMModel(180,180,200, bidirectional=False)
-#     # main('NB_co_long_bi_new', 'NB_co_long_bi_newCDfilt_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 10}    
-#     main('NB_co_long_bi_new', 'NB_co_long_bi_newCDfilt_re_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
-
-#     train_params = {'batch_size': 10, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
-#     neural_net = MyLSTMModel(180,180,200, bidirectional=False)
-#     # main('trial', 'trial_rec', data_len=12000, train_len=10000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, smoothing=False)
-
-#     # Remember no delay for below
-#     p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
-#     # print(p.Sigma0)
-#     # print(torch.diag(p.Q))
-#     # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
-#     p.freeze_params()
-#     z_path = None
-#     datapath = 'processed_data_64.pickled'
-#     neural_net = MyLSTMModel(180,180,10, bidirectional=False)
-#     train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-#     train_params_rec = {'batch_size': 10, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
-#     # main('64ms_10z', '64ms_10z_filt_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
-#     # main('64ms_10z', '64ms_10z_filt_bigentropy_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
-#     train_params_rec = {'batch_size': 10, 'step_size': 500, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
-#     # main('64ms_10z', '64ms_10z_filt_bigentropy_re_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
-
 if __name__ == '__main__':
-    class MultiHeadRNN(Module):
-        def __init__(self, input_size, hidden_size, output_sizes: dict):
-            super(MultiHeadRNN, self).__init__()
-            # self.rnn = torch.nn.RNN(input_size, hidden_size, batch_first=True, bidirectional=True, num_layers=1)
-            self.rnn = torch.nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=False)
-            self.fcs = torch.nn.ModuleDict()
-            for key, value in output_sizes.items():
-                if key == 'x_tilde':
-                    self.fcs[key] = torch.nn.Sequential(
-                        torch.nn.Linear(hidden_size, value)
-                    )
-                else:
-                    layer = torch.nn.Linear(hidden_size, value)
-                    layer.weight.data.fill_(0)
-                    layer.bias.data.fill_(0)
-                    self.fcs[key] = torch.nn.Sequential(
-                        layer
-                    )
-                    # self.fcs[key] = torch.nn.Sequential(
-                    #     torch.nn.Linear(hidden_size * 2, hidden_size),
-                    #     torch.nn.ReLU(),
-                    #     torch.nn.Linear(hidden_size, value)
-                    # )
-        def forward(self, x):
-            out, _ = self.rnn(x)
-            ret = dict()
-            for key, fc in self.fcs.items():
-                ret[key] = fc(out)
-            return ret
+    # # Doherty
+    # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
+    # p.freeze_params()
+    # train_params = {'batch_size': None, 'n_mc': 100, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50}
+    # train_params_rec = {'batch_size': None, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 501, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 50}
+    # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
+    # neural_net = None
+    # z_path = 'new_params/z_hat_1t_shifted.npy'
+    # datapath = None
+    # # main('shifted', 'shifted_rec', z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+
+    # p = pickle.load(open('new_params/9k1t.pkl', 'rb'))
+    # p.freeze_params()
+    # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 8, 'step_size': 30, 'lrate': 1e-3, 'max_steps': 501, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
+    # neural_net = dill.load(open('bgpfa_models/9k_rec.pkl', 'rb')).neural_net.cpu()
+    # z_path = 'new_params/z_hat_9k1t_shifted.npy'
+    # # main('9k', '9k_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+
+    # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
+    # p.freeze_params()
+    # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
+    # z_path = 'new_params/z_hat_20min_smooth.npy'
+    # # main('9ktrain_5kpre', '9ktrain_5kpre_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+    # # # Wrong CD, I zeroed out Ys, not the gradients
+    # # main('9ktrain_5kpre', '9ktrain_5kpre_rec_CD', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, CD=0.8)
+    # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+    # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_CD_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('9ktrain_5kpreNB', '9ktrain_5kpre_NB_new_CD_rec', data_len=9000, train_len=9000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('320NB', '320NB_CD_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('320NB', '320NB_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+    # # z_path = 'new_params/z_hat_20min_filter.npy'
+    # # main('320NB_filt', '320NB_filt_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+
+    # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True, 'A': True, 'B': True}
+    # z_path = 'new_params/z_hat_20min_smooth.npy'
+    # # main('320NB', '320NB_CD_AB_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True, 'A': True, 'B': True, 'pre_W': True, 'pre_R': True}
+    # # main('320NB', '320NB_CD_ABp_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, load_rec_model='320NB_CD_AB_rec')
+    
+    # # Not training A, C, W etc in recognition model. But A, B are trained in generative model
+    # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 1e-2, 'max_steps': 501, 'step_size': 20, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # # main('gen_train', 'gen_train_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, trained_z=False)
+
+    # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # # neural_net = MyLSTMModel(200,100,200, bidirectional=False)
+    # # main('320NB', '320NB_CD_ABp_smallrnn_rec', data_len=12800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
+
+    # # try z_dim = 20
+    # p = pickle.load(open('new_params/5k_20z.pkl', 'rb'))
+    # gen_model_fixed = {'all': True}
+    # neural_net = MyRNNModel(200, 200, 200)
+    # z_path = 'new_params/z_hat_5k_20z.npy'
+    # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # # Exactly same as '5k_20z_rec'
+    # # main('5k_20z', '5k_20z_rec_new', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    
+    # p = pickle.load(open('new_params/5k_30z.pkl', 'rb'))
+    # z_path = 'new_params/z_hat_5k_30z.npy'
+    # # main('5k_30z', '5k_30z_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
+    # p = pickle.load(open('new_params/_1t.pkl', 'rb'))
+    # z_path = 'new_params/z_hat_20min_smooth.npy'
+    # # main('5k_10z', '5k_10z_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('5k_10z_poisson_noCD', '5k_10z_poisson_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+    # # main('5k_10z_poisson_noCD2', '5k_10z_poisson_noCD_rec2', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+    # # main('5k_10z_NB_noCD', '5k_10z_NB_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+
+    # # AA2236 THIS WAS RUN ON BIDIRECTIONAL RNN by mistake!!!!!!!
+    # # main('5k_10z_NB_CDnew', '5k_10z_NB_CDnew_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
+    # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
+    # # main('5k_10z_NB_CDnewLSTM', '5k_10z_NB_CDnewLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('5k_10z_NB_newLSTM', '5k_10z_NB_newLSTM_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB')
+    # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 14, 'n_mc_z': 14, 'batch_mc_z': 14, 'accumulate_gradient': False, 'save_every': 10}
+    # # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_oldCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # Below is with new CD (scaled yLL)
+    # # main('5k_10z_NB_newLSTM_oldCD', '5k_10z_NB_newLSTM_newCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+    # # main('5k_10z_NB_newLSTM_oldCD', 'filt_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
+    # neural_net = MyLSTMModel(200,200,300, bidirectional=False)
+    # train_params = {'batch_size': 64, 'n_mc': 20, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # main('filt_high_xdim', 'filt_high_xdim_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=300, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, smoothing=False)
+
+    # z_path = None
+    # # AA2236 Below were done with bidirectional RNN I think
+    # # main('5k_10z_notshifted', '5k_10z_notshifted_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, delay=0)
+    # # main('5k_10z_notshifted_noCD', '5k_10z_notshifted_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', delay=0)
+    # # main('5k_10z_notshifted_poisson', '5k_10z_notshifted_poisson_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, CD=0.8, delay=0)
+    # # main('5k_10z_notshifted_poisson_noCD', '5k_10z_notshifted_poisson_noCD_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, delay=0)
+
+
+    # # p_new = Preprocessor(p.v.copy(), z_dim=10, W)
+
+
+    # # train_params = {'batch_size': 16, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # # train_params_rec = {'batch_size': 2, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # # neural_net = MyLSTMModel(200,200,200, bidirectional=False)
+    # # main('320NB_400t', '320NB_400t_CD_ABp_rec', data_len=12800, train_len=12800, trial_len=400, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8)
+
+    # # 4g10
+    # p = pickle.load(open('4g10preprocess/10ms.pkl', 'rb'))
+    # p.freeze_params()
+    # train_params = {'batch_size': 200, 'n_mc': 25, 'lrate': 5e-3, 'max_steps': 1001, 'step_size': 2000, 'StepLR': True, 'batch_type': BATCHING.TRIALS, 'save_every': 50}
+    # train_params_rec = {'batch_size': 50, 'step_size': 1000, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
+    # gen_model_fixed = {'C': False, 'R': True, 'W': True, 'd': True}
+    # neural_net = MyLSTMModel(162, 200, 162)
+    # z_path = '4g10preprocess/z_hat_10ms.npy'
+    # datapath = 'data_10ms.npz'
+
+    # # main('first_10ms', 'first_10ms_rec', z_path=z_path, datapath=datapath, gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+
+    # train_params_rec = {'batch_size': 50, 'step_size': 100, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 10, 'n_mc_z': 10, 'batch_mc_z': 10, 'accumulate_gradient': False, 'save_every': 10}
+    # neural_net = MyLSTMModel(162, 200, 162, bidirectional=False)
+    # main('first_10ms', 'first_10ms_rec_online', z_path=z_path, datapath=datapath, gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params)
+
+    # Doherty but without preprocess init
+    # train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    # train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    train_params = {'batch_size': 50, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 0, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    fake_v = torch.randn((1,2,2)).to(device)
+    p = Preprocessor(v=fake_v, z_dim=10, noise_scale=0.1)
+    datapath = None
+    z_path = None
+    gen_model_fixed = {'all': True}
+    neural_net = MyLSTMModel(180,200,200, bidirectional=False)
+
+    np.random.seed(0)
+    indices = np.random.choice(200, 20, replace=False)
+    print(indices)
+    # main('no_init', 'no_init_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
+
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-2, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    # main('no_init2', 'no_init2_rec', data_len=15000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True)
+    train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
+    neural_net = MyLSTMModel(180,200,200, bidirectional=True) # only below ran with bidirectional
+    # main('no_init_long', 'no_init_long_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, generate_random_z=True, CD=0.8)
+
+
+    # The next 2 were run with unidirectional LSTM
+    train_params = {'batch_size': 25, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10}
+    p = pickle.load(open('new_params/_1t.pkl', 'rb'))
+    z_path = 'new_params/z_hat_20min_smooth.npy'
+    # main('NB_co', 'NB_co_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+    
+    train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 0}
+    # main('NB_co_long', 'NB_co_long_rec', data_len=42800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+
+
+
+    train_params = {'batch_size': 25, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10}
+    neural_net = MyLSTMModel(180,180,200, bidirectional=True)
+    # main('NB_co_bi', 'NB_co_bi_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+    # main('NB_co_bi_new', 'NB_co_bi_new_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+
+    train_params = {'batch_size': 64, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 8, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
+    # main('NB_co_long_bi', 'NB_co_long_bi_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+    # Retry with different likelihood
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_new_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices)
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_newCD_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    
+    train_params = {'batch_size': 64, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    neural_net = MyLSTMModel(180,180,10, bidirectional=True)
+    # main('NB_co_long_bi_new_small_x', 'NB_co_long_bi_small_x_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+    p = pickle.load(open('new_params/5k_20z.pkl', 'rb'))
+    p.freeze_params()
+    z_path = 'new_params/z_hat_5k_20z.npy'
+    neural_net = MyLSTMModel(180,180,20, bidirectional=True)
+    # main('20z', '20z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=20, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+    p = pickle.load(open('new_params/5k_5z_new.pkl', 'rb'))
+    p.freeze_params()
+    z_path = None
+    neural_net = MyLSTMModel(180,180,5, bidirectional=True)
+    # main('5z', '5z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=5, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+
+    p = pickle.load(open('new_params/5k_15z.pkl', 'rb'))
+    # print(p.Sigma0)
+    p.freeze_params()
+    z_path = None
+    neural_net = MyLSTMModel(180,180,15, bidirectional=True)
+    # main('15z', '15z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=15, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+    p = pickle.load(open('new_params/5k_2z.pkl', 'rb'))
+    # print(p.Sigma0)
+    p.freeze_params()
+    z_path = None
+    neural_net = MyLSTMModel(180,180,2, bidirectional=True)
+    # main('2z', '2z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+    # main('2z_zv', '2z_zv_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=2, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, load_v_to_z=True, generate_random_z=True)
+
+    # p = pickle.load(open('new_params/5k_15z.pkl', 'rb'))
+    # # print(p.Sigma0)
+    # p.freeze_params()
+    # z_path = None
+    # neural_net = MyLSTMModel(180,180,15, bidirectional=True)
+    # main('15z', '15z_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=15, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+    # Remember no delay for below
     p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
+    # print(p.Sigma0)
+    # print(torch.diag(p.Q))
+    # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
     p.freeze_params()
     z_path = None
     datapath = 'processed_data_64.pickled'
-    gen_model_fixed = {'all': True}
-    # neural_net = MyLSTMModel(200,200,10, bidirectional=True)
-    neural_net = MultiHeadRNN(200, 200, {'x_tilde': 10, 'delta_W': 100, 'delta_R': 10})
+    neural_net = MyLSTMModel(180,180,10, bidirectional=True)
     train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
-    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'print_deltas': True}
-    main('64ms_10z', '64ms_10z_filt_cov_change', data_len=27000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True, smoothing=False)
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10}
+    # main('64ms_10z', '64ms_10z_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8)
+
+    # FILTERING CAN BE WRONG
+    neural_net = MyLSTMModel(180,180,200, bidirectional=False)
+    # neural_net = MyLSTMModel(180,180,200, bidirectional=False)
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_newCDfilt_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 10}    
+    # main('NB_co_long_bi_new', 'NB_co_long_bi_newCDfilt_re_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+
+    train_params = {'batch_size': 10, 'n_mc': 50, 'lrate': 5e-2, 'max_steps': 1, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
+    neural_net = MyLSTMModel(180,180,200, bidirectional=False)
+    # main('trial', 'trial_rec', data_len=12000, train_len=10000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=False, full_R=True, x_dim=None, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, smoothing=False)
+
+    # Remember no delay for below
+    p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
+    # print(p.Sigma0)
+    # print(torch.diag(p.Q))
+    # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
+    p.freeze_params()
+    z_path = None
+    datapath = 'processed_data_64.pickled'
+    neural_net = MyLSTMModel(180,180,10, bidirectional=False)
+    train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    train_params_rec = {'batch_size': 10, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
+    # main('64ms_10z', '64ms_10z_filt_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+    # main('64ms_10z', '64ms_10z_filt_bigentropy_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+    train_params_rec = {'batch_size': 10, 'step_size': 500, 'lrate': 1e-3, 'max_steps': 1001, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'test_co_smoothing_samps': 1, 'test_co_smoothing_samps_per_batch': 1, 'train_co_smoothing_samps': 1, 'train_co_smoothing_samps_per_batch': 1}
+    # main('64ms_10z', '64ms_10z_filt_bigentropy_re_rec', data_len=10000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', held_out_neurons=indices, CD=0.8, smoothing=False)
+
+
+    # Remember no delay for below
+    p = pickle.load(open('new_params/64ms_10z_2k_20160630.pkl', 'rb'))
+    # print(p.Sigma0)
+    # print(torch.diag(p.Q))
+    # print(np.abs(np.linalg.eigvals(p.A.cpu().numpy())), 'A')
+    p.freeze_params()
+    z_path = None
+    datapath = '20160630_processed_data_64.pickled'
+    train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+    neural_net = MyLSTMModel(141,141,10, bidirectional=False)
+    train_params_rec = {'batch_size': 10, 'step_size': 50, 'lrate': 1e-2, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1,}
+    # main('20160630_10z_filter', '20160630_10z_filter_rec', data_len=22000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='Poisson', CD=0.8, smoothing=False)
+    main('20160630_10z_filter', '20160630_10z_filter_samp_rec', data_len=22000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='Poisson', CD=0.8, smoothing=False)
+
+# if __name__ == '__main__':
+#     class MultiHeadRNN(Module):
+#         def __init__(self, input_size, hidden_size, output_sizes: dict):
+#             super(MultiHeadRNN, self).__init__()
+#             # self.rnn = torch.nn.RNN(input_size, hidden_size, batch_first=True, bidirectional=True, num_layers=1)
+#             self.rnn = torch.nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=False)
+#             self.fcs = torch.nn.ModuleDict()
+#             for key, value in output_sizes.items():
+#                 if key == 'x_tilde':
+#                     self.fcs[key] = torch.nn.Sequential(
+#                         torch.nn.Linear(hidden_size, value)
+#                     )
+#                 else:
+#                     layer = torch.nn.Linear(hidden_size, value)
+#                     layer.weight.data.fill_(0)
+#                     layer.bias.data.fill_(0)
+#                     self.fcs[key] = torch.nn.Sequential(
+#                         layer
+#                     )
+#                     # self.fcs[key] = torch.nn.Sequential(
+#                     #     torch.nn.Linear(hidden_size * 2, hidden_size),
+#                     #     torch.nn.ReLU(),
+#                     #     torch.nn.Linear(hidden_size, value)
+#                     # )
+#         def forward(self, x):
+#             out, _ = self.rnn(x)
+#             ret = dict()
+#             for key, fc in self.fcs.items():
+#                 ret[key] = fc(out)
+#             return ret
+#     p = pickle.load(open('new_params/64ms_10z_2k.pkl', 'rb'))
+#     p.freeze_params()
+#     z_path = None
+#     datapath = 'processed_data_64.pickled'
+#     gen_model_fixed = {'all': True}
+#     # neural_net = MyLSTMModel(200,200,10, bidirectional=True)
+#     neural_net = MultiHeadRNN(200, 200, {'x_tilde': 10, 'delta_W': 100, 'delta_R': 10})
+#     train_params = {'batch_size': 25, 'n_mc': 25, 'lrate': 5e-2, 'max_steps': 151, 'step_size': 200, 'save_every': 50, 'batch_type': BATCHING.TRIALS}
+#     train_params_rec = {'batch_size': 5, 'step_size': 50, 'lrate': 1e-3, 'max_steps': 301, 'n_mc_x': 20, 'n_mc_z': 20, 'batch_mc_z': 20, 'accumulate_gradient': False, 'save_every': 1, 'print_deltas': True}
+#     # main('64ms_10z', '64ms_10z_filt_cov_change', data_len=27000, train_len=5000, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True, smoothing=False)

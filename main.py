@@ -323,7 +323,7 @@ class LDS(GenerativeModel):
         else:
             return first+second, first, second # p(y_{1:T}|z_{1:T}), p(z_{1:T})
     
-    def sample_z(self, n_mc: int, trials, prev_z=None, T=None): # Sample z from the prior of the LDS
+    def sample_z(self, n_mc: int, trials, prev_z=None, T=None, As=None, Qs=None): # Sample z from the prior of the LDS
         # prev_z is (n_mc, ntrials, b)
         if T is None:
             T = self.T
@@ -337,7 +337,14 @@ class LDS(GenerativeModel):
             start_t = 1
             prev_z = z0
         for t in range(start_t, T):
-            z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
+            if As is None and Qs is None:
+                z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
+            if As is not None and Qs is not None:
+                z_t = (As[t-1][None, ...] @ prev_z[..., None] + torch.linalg.cholesky(Qs[t-1])[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
+            if As is not None and Qs is None:
+                z_t = (As[t-1][None, ...] @ prev_z[..., None] + torch.linalg.cholesky(self.Q)[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
+            if As is None and Qs is not None:
+                z_t = (self.A[None, ...] @ prev_z[..., None] + torch.linalg.cholesky(Qs[t-1])[None, ...] @ torch.randn(n_mc, trials, self.b, 1).to(device)).squeeze(-1)
             samples[..., t] = z_t
             prev_z = z_t
 
@@ -562,6 +569,8 @@ class RecognitionModel(Module):
         # For debugging
         self.dWs = []
         self.dRs = []
+        self.dAs = []
+        self.dBs = []
     def training_params(self, **kwargs): # code from mgp
         params = {
             'max_steps': 1001,
@@ -654,6 +663,32 @@ class RecognitionModel(Module):
             # print(torch.max(delta_W), torch.min(delta_W))
             
             return self.gen_model.W.squeeze(0) + delta_W
+        
+    def gen_model_A(self, pseudo_obs):
+        if not self.cov_change or pseudo_obs is None or pseudo_obs['delta_A'] is None:
+            return self.gen_model.A.squeeze(0)
+        else:
+            # delta_A directly changes the A matrix
+            delta_A = pseudo_obs['delta_A']
+            self.dAs.append((torch.max(delta_A).item(), torch.min(delta_A).item()))
+            As = self.gen_model.A.squeeze(0) + delta_A
+            # print maximum absolute eigenvalue of A
+            print(torch.max(torch.abs(torch.linalg.eigvals(As))))
+            return As
+    
+    def gen_model_Q(self, pseudo_obs): # Dangerous
+        if not self.cov_change or pseudo_obs is None or pseudo_obs['delta_B'] is None:
+            return self.gen_model.Q.squeeze(0)
+        else:
+            # delta_B directly changes the B matrix
+            delta_B = pseudo_obs['delta_B']
+            self.dBs.append((torch.max(delta_B).item(), torch.min(delta_B).item()))
+            assert delta_B.shape[-1] == self.gen_model.b
+            delta_B = torch.diag_embed(delta_B)
+            B = self.gen_model.B.squeeze(0) + delta_B
+            Q = B @ B.transpose(-1, -2) + 1e-6 * torch.eye(self.gen_model.b).to(device) # (batch_size, ntrials, b, b)
+            return Q
+
 
     def train_full_model(self, train_params_gen, train_params_recognition):
         self.gen_model.train_supervised_model(train_params_gen)
@@ -672,6 +707,8 @@ class RecognitionModel(Module):
     def get_x_tilde(self, y: Tensor, only_x_tilde=True):
         delta_R = None
         delta_W = None
+        delta_A = None
+        delta_B = None
         # y is (ntrials, N, batch_size)
         if not self.cov_change:
             x_tilde = self.neural_net(y.transpose(-1, -2)) # (ntrials, batch_size, x_dim)
@@ -691,6 +728,11 @@ class RecognitionModel(Module):
             if 'delta_W' in pseudo_obs:
                 delta_W = pseudo_obs['delta_W'].transpose(1,0) # (batch_size, ntrials, x_dim * b)
                 delta_W = delta_W.reshape(delta_W.shape[0], delta_W.shape[1], self.gen_model.x_dim, self.gen_model.b) # (batch_size, ntrials, x_dim, b)
+            if 'delta_A' in pseudo_obs:
+                delta_A = pseudo_obs['delta_A'].transpose(1,0)
+                delta_A = delta_A.reshape(delta_A.shape[0], delta_A.shape[1], self.gen_model.b, self.gen_model.b)
+            if 'delta_B' in pseudo_obs:
+                delta_B = pseudo_obs['delta_B'].transpose(1,0)
 
 
         x_tilde =  x_tilde.transpose(-1, -2) # (ntrials, x_dim, batch_size)
@@ -699,10 +741,18 @@ class RecognitionModel(Module):
         if only_x_tilde:
             return x_tilde
         else:
-            return {'x_tilde': x_tilde, 'delta_R': delta_R, 'delta_W': delta_W}
+            return {'x_tilde': x_tilde, 'delta_R': delta_R, 'delta_W': delta_W, 'delta_A': delta_A, 'delta_B': delta_B}
     
     def sample_matheron_pert(self, n_mc: int, trials, pseudo_obs=None, T=None):
-        z_prior = self.gen_model.sample_z(n_mc, trials, T=T).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
+        Q = self.gen_model_Q(pseudo_obs)
+        A = self.gen_model_A(pseudo_obs)
+        As = None
+        Qs = None
+        if len(Q.shape) != 2:
+            Qs = Q
+        if len(A.shape) != 2:
+            As = A
+        z_prior = self.gen_model.sample_z(n_mc, trials, T=T, As=As, Qs=Qs).transpose(-1, -2) # (n_mc, ntrials, T, b) # TODO: how to deal with batch_size?
         W = self.gen_model_W(pseudo_obs)
         if len(W.shape) != 2:
             W = W.transpose(0, 1) # (ntrials, T, x_dim, b)
@@ -718,9 +768,11 @@ class RecognitionModel(Module):
     def kalman_covariance(self, T=None, get_sigma_tilde=False, pseudo_obs=None, smoothing=True, filter_entropy_terms=False, return_covs=False): # return all matrices independent of observations
         if T is None:
             T = self.gen_model.T
-        A = self.gen_model.A.squeeze(0) # (b, b)
+        # A = self.gen_model.A.squeeze(0) # (b, b)
+        A = self.gen_model_A(pseudo_obs)
         W = self.gen_model_W(pseudo_obs)
-        Q = self.gen_model.Q.squeeze(0) # (b, b)
+        # Q = self.gen_model.Q.squeeze(0) # (b, b)
+        Q = self.gen_model_Q(pseudo_obs)
         R = self.gen_model_R(pseudo_obs)
         Sigma0 = self.gen_model.Sigma0.squeeze(0) # (b, b)
         b = self.gen_model.b
@@ -728,7 +780,7 @@ class RecognitionModel(Module):
         return general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T, get_sigma_tilde, smoothing, filter_entropy_terms, ret_smoothing_cov=return_covs)
     
     def kalman_means(self, x_hat: Tensor, Ks: Tensor, Cs: Tensor, pseudo_obs=None, smoothing=True, filter_entropy_K=None):
-        A = self.gen_model.A.squeeze(0) # (b, b)
+        A = self.gen_model_A(pseudo_obs)
         W = self.gen_model_W(pseudo_obs)
         b = self.gen_model.b
         mu0 = self.gen_model.mu0.squeeze(0) # (b)
@@ -985,6 +1037,10 @@ class RecognitionModel(Module):
                         print_str += 'dWs: ' + str(self.dWs[-1])
                     if len(self.dRs) > 0:
                         print_str += 'dRs: ' + str(self.dRs[-1])
+                    if len(self.dAs) > 0:
+                        print_str += 'dAs: ' + str(self.dAs[-1])
+                    if len(self.dBs) > 0:
+                        print_str += 'dBs: ' + str(self.dBs[-1])
                     print(print_str)
             if train_params_recognition['save_every'] is not None and i % train_params_recognition['save_every'] == 0:
                 dill.dump(self, open(train_params_recognition['save_name'] + '.pkl', 'wb'))

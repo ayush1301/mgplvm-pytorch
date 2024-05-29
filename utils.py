@@ -96,7 +96,7 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             if ret_smoothing_cov:
                 Sigmas_smooth.append(Sigmas_filt[t] + Cs[t] @ (Sigmas_smooth[-1] - Sigmas_diffused[t]) @ Cs[t].transpose(-1,-2))
         # Find minimum eigenvalue of Sigmas_tilde
-        print(torch.linalg.eigvalsh(torch.stack(Sigmas_tilde)).min())
+        # print(torch.linalg.eigvalsh(torch.stack(Sigmas_tilde)).min())
         Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (ntrials, b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())
@@ -118,9 +118,9 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             # Sigma_bar = make_symmetric(Q[0] - K @ W[0] @ Q[0]) # (ntrials, b, b)
 
             # Need K = QW^T (R + WQW^T)^-1, Sigma_bar = Q - K W Q # FOr verying R and W
-            S = torch.linalg.cholesky(R + W @ Q[0] @ W.transpose(-1, -2)) # (ntrials, x_dim, x_dim)
-            K = chol_inv(S, Q[0] @ W.transpose(-1, -2), left=False) # (ntrials, b, x_dim)
-            Sigma_bar = make_symmetric(Q[0] - K @ W @ Q[0]) # (ntrials, b, b)
+            S = torch.linalg.cholesky(R + W @ Q @ W.transpose(-1, -2)) # (ntrials, x_dim, x_dim)
+            K = chol_inv(S, Q @ W.transpose(-1, -2), left=False) # (ntrials, b, x_dim)
+            Sigma_bar = make_symmetric(Q - K @ W @ Q) # (ntrials, b, b)
 
             return torch.stack(Sigmas_filt), torch.stack(Sigmas_diffused), torch.stack(Ks), K, Sigma_bar # (T, b, b), (T-1, b, b), (T, b, x_dim), (ntrials, b, x_dim), (ntrials, b, b)
     

@@ -96,7 +96,7 @@ def general_kalman_covariance(A, W, Q, R, b, x_dim, Sigma0, T=None, get_sigma_ti
             if ret_smoothing_cov:
                 Sigmas_smooth.append(Sigmas_filt[t] + Cs[t] @ (Sigmas_smooth[-1] - Sigmas_diffused[t]) @ Cs[t].transpose(-1,-2))
         # Find minimum eigenvalue of Sigmas_tilde
-        print(torch.linalg.eigvalsh(torch.stack(Sigmas_tilde)).min())
+        # print(torch.linalg.eigvalsh(torch.stack(Sigmas_tilde)).min())
         Sigmas_tilde_chol = torch.linalg.cholesky(torch.stack(Sigmas_tilde) + 1e-4 * torch.eye(b).to(device)) # (ntrials, b, b)
 
         # print(torch.linalg.det(Sigmas_tilde).mean())

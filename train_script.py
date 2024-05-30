@@ -625,7 +625,12 @@ if __name__ == '__main__':
     train_params_rec = {'batch_size': 16, 'step_size': 500, 'lrate': 1e-3, 'max_steps': 401, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 1, 'print_deltas': True}
     # main('10z', '10z_cov_change_rec', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True)
     # main('10z', '10z_cov_change_recLSTM', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True)
-    
-    neural_net = MultiHeadRNN(200, 200, {'x_tilde': 10, 'delta_W': 100, 'delta_R': 10, 'delta_B': 10, 'delta_A': 100})
-    main('10z', '10z_cov_change_trial', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True)
 
+    neural_net = MultiHeadRNN(200, 200, {'x_tilde': 10, 'delta_W': 100, 'delta_R': 10, 'delta_B': 10, 'delta_A': 100})
+    # main('10z', '10z_cov_change_trial', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True)
+
+    np.random.seed(0)
+    indices = np.random.choice(200, 20, replace=False)
+    neural_net = MultiHeadRNN(180, 180, {'x_tilde': 10, 'delta_W': 100, 'delta_R': 10, 'delta_B': 10})
+    train_params_rec = {'batch_size': 16, 'step_size': 500, 'lrate': 1e-3, 'max_steps': 801, 'n_mc_x': 18, 'n_mc_z': 18, 'batch_mc_z': 18, 'accumulate_gradient': False, 'save_every': 10, 'test_co_smoothing_samps': 100, 'test_co_smoothing_samps_per_batch': 10, 'train_co_smoothing_samps': 100, 'train_co_smoothing_samps_per_batch': 10, 'print_deltas': True}
+    main('10z', '10z_cov_change_cosmoothing', data_len=22800, train_len=12800, trial_len=100, z_path=z_path, datapath=datapath, dataset='Doherty', gen_load=True, full_R=True, x_dim=10, neural_net=neural_net, preprocessor=p, gen_model_fixed=gen_model_fixed, train_params_rec=train_params_rec, train_params=train_params, noise='NB', CD=0.8, cov_change=True, held_out_neurons=indices)

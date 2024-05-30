@@ -1026,7 +1026,7 @@ class RecognitionModel(Module):
         for param in self.neural_net.parameters():
             param.requires_grad = False
 
-    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1, train_indices=None, return_covs=False):
+    def test_z(self, test_y: Tensor, smoothing=True, samples: int = 0, batch: int = -1, train_indices=None, return_covs=False, ret_pseudo_obs=False):
         # TODO batching
         # return posterior mean on test data
 
@@ -1079,7 +1079,10 @@ class RecognitionModel(Module):
             if return_covs:
                 return z, np.vstack(ret_samples), SIGMA
             else:
-                return z, np.vstack(ret_samples)
+                if ret_pseudo_obs:
+                    return z, np.vstack(ret_samples), pseudo_obs
+                else:
+                    return z, np.vstack(ret_samples)
         else:
             if return_covs:
                 return z, SIGMA
@@ -1124,24 +1127,50 @@ class RecognitionModel(Module):
         plt.ylabel('LL')
         plt.show()
 
-    def get_firing_rates(self, z_samps: np.ndarray):
-        # z_samps is (n_mc, ntrials, z_dim, T)
-        W = self.gen_model.W[0].detach().cpu()
+    def get_firing_rates(self, z_samps: np.ndarray, pseudo_obs=None):
+        # # z_samps is (n_mc, ntrials, z_dim, T)
+        # W = self.gen_model.W[0].detach().cpu()
+        # C = self.gen_model.C.detach().cpu()
+        # if len(C.shape) == 3: # For buggy identity C in some tests. Length should always be 3
+        #     C = C[0]
+        # R = self.gen_model.R[0].detach().cpu()
+        # d = self.gen_model.d.detach().cpu()
+        # # print(W.shape, C.shape, R.shape, d.shape)
+        # X = W @ z_samps
+        # X += torch.linalg.cholesky(R) @ torch.randn(*X.shape)
+        # # print(C.shape, 'C shape')
+        # # print((C @ X ).shape, 'CX shape')
+        # # print((C @ X + d[:, None]).shape, 'cx + d shape')
+        # F_samps= self.gen_model.link_fn(C @ X + d[:, None])
+
+        # F = self.gen_model.lik.dist_mean(F_samps)
+        
+        # return F.mean(dim=0), F_samps, X
+        z_samps = torch.Tensor(z_samps).transpose(-1,-2).numpy()
+        W = self.gen_model_W(pseudo_obs).detach().cpu()
         C = self.gen_model.C.detach().cpu()
-        if len(C.shape) == 3: # For buggy identity C in some tests. Length should always be 3
-            C = C[0]
-        R = self.gen_model.R[0].detach().cpu()
+        R = self.gen_model_R(pseudo_obs).detach().cpu()
         d = self.gen_model.d.detach().cpu()
-        # print(W.shape, C.shape, R.shape, d.shape)
-        X = W @ z_samps
-        X += torch.linalg.cholesky(R) @ torch.randn(*X.shape)
-        # print(C.shape, 'C shape')
-        # print((C @ X ).shape, 'CX shape')
-        # print((C @ X + d[:, None]).shape, 'cx + d shape')
+
+        # print(W.shape, C.shape, R.shape, d.shape, z_samps.shape)
+
+        if len(W.shape) != 2:
+            W = W.transpose(0,1) # (ntrials, T, x_dim, b)
+        X = W @ z_samps[..., None]
+        # pertubation = self.gen_model.W[None, ...] @ z_prior[..., None] # (n_mc, ntrials, T, x_dim, 1)
+        # noise = torch.linalg.cholesky(self.gen_model.R) @ torch.randn(*pertubation.shape).to(device) # (n_mc, ntrials, T, x_dim, 1)
+        if len(R.shape) != 2:
+            R = R.transpose(0,1) # (ntrials, T, x_dim, x_dim)
+        noise = torch.linalg.cholesky(R) @ torch.randn(*X.shape) # (n_mc, ntrials, T, x_dim, 1)
+        X = (X + noise)[..., 0].transpose(-1,-2)# (n_mc, ntrials, x_dim, T)
+        # print(X.shape, 'X shape')
         F_samps= self.gen_model.link_fn(C @ X + d[:, None])
 
         F = self.gen_model.lik.dist_mean(F_samps)
+        
         return F.mean(dim=0), F_samps, X
+
+
 
     def co_smoothing(self, Y: Tensor, rates: Tensor):
         dist = Poisson(rate=rates)
@@ -1156,7 +1185,7 @@ class RecognitionModel(Module):
 
     
     def complete_co_smoothing(self, test_y, smoothing, samples, batch, train_indices, test_indices):
-        _, z_samps = self.test_z(test_y=test_y, smoothing=smoothing, samples=samples, batch=batch, train_indices=train_indices)
+        _, z_samps, pseudo_obs = self.test_z(test_y=test_y, smoothing=smoothing, samples=samples, batch=batch, train_indices=train_indices, ret_pseudo_obs=True)
         torch.cuda.empty_cache()
-        F = self.get_firing_rates(z_samps)[0]
+        F = self.get_firing_rates(z_samps, pseudo_obs=pseudo_obs)[0]
         return self.co_smoothing(test_y[:, test_indices, :], F[:, test_indices, :].to(device))[0]
